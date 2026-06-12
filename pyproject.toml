@@ -1,7 +1,7 @@
 [project]
-name = "test-copy"
+name = "Experimentarium"
 version = "0.1.0"
-description = "Add your description here"
+description = "A production-grade PyTorch research framework for reproducible experiments, modular training, configuration management, logging, and checkpointing."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 dependencies = [

@@ -1,4 +1,4 @@
-# ml-template
+# Experimentarium
 
 A research-grade PyTorch experiment framework intended to be copied into a new ML project and extended. It is built around Hydra configs, registries, task-specific loss and metric logic, fault-tolerant checkpoints, sanity checks for new machines, and CPU-friendly tests.
 
