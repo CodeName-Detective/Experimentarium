@@ -1,0 +1,29 @@
+# Synthetic vector-regression dataset for trainer and metric smoke tests.
+
+# Dataset registry key from src/data/dataset.py.
+name: toy_regression
+# Seed for deterministic synthetic sample generation.
+seed: ${run.seed}
+# Feature dimension produced in each sample.
+input_dim: 16
+# Regression target dimension produced by the dataset.
+output_dim: 1
+# Number of samples per dataloader batch.
+batch_size: 32
+# Number of subprocess workers for DataLoader.
+num_workers: 0
+# Whether DataLoader should pin CPU memory for faster CUDA transfer.
+pin_memory: false
+# Whether to drop the last incomplete training batch.
+drop_last: false
+# Per-split synthetic dataset sizes.
+splits:
+  # Training split used for gradient updates.
+  train:
+    num_samples: 256
+  # Validation split used for model selection and scheduler monitors.
+  val:
+    num_samples: 64
+  # Test split used for final held-out metrics and prediction export.
+  test:
+    num_samples: 64

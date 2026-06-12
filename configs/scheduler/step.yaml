@@ -1,0 +1,17 @@
+# StepLR scheduler config.
+# Drops LR by gamma every fixed step_size epochs or steps.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: step
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Number of scheduler steps between LR drops.
+step_size: 10
+# Multiplicative LR drop factor.
+gamma: 0.1
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

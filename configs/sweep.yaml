@@ -1,0 +1,28 @@
+# W&B sweep definition used by scripts/sweep.sh.
+
+# Training program launched by each sweep agent run.
+program: src/main.py
+# Sweep search strategy: grid, random, or bayes.
+method: bayes
+# Objective metric reported by the training script.
+metric:
+  # Metric key to optimize.
+  name: val/loss
+  # Optimization direction for the metric.
+  goal: minimize
+# Hydra override parameters explored by the sweep.
+parameters:
+  # Optimizer learning-rate search space.
+  optimizer.lr:
+    distribution: log_uniform_values
+    min: 1.0e-5
+    max: 1.0e-2
+  # MLP dropout candidates.
+  model.dropout:
+    values: [0.0, 0.1, 0.2]
+  # MLP hidden width candidates.
+  model.hidden_dim:
+    values: [32, 64, 128]
+  # Dataloader batch-size candidates.
+  data.batch_size:
+    values: [16, 32, 64]

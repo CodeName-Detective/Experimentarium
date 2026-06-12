@@ -1,0 +1,19 @@
+# CosineAnnealingWarmRestarts scheduler config.
+# Runs cosine cycles with periodic warm restarts.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: cosine_restart
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Number of scheduler steps before the first restart.
+T_0: 10
+# Multiplicative factor that expands cycle length after each restart.
+T_mult: 2
+# Minimum LR reached within each cosine cycle.
+eta_min: 0.0
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

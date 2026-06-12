@@ -1,0 +1,14 @@
+# Small CNN config for image-like inputs.
+
+# Model registry key from src/models/model.py.
+name: cnn
+# Number of image input channels.
+in_channels: 3
+# Square input image size expected by the classifier head.
+image_size: 32
+# Base convolution channel width.
+width: 32
+# Number of classification logits produced by the final layer; resolved from the selected dataset.
+num_classes: ${data.num_classes}
+# Dropout probability before the classifier head.
+dropout: 0.0

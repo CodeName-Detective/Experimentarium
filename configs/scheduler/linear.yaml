@@ -1,0 +1,19 @@
+# LinearLR scheduler config.
+# Linearly interpolates LR from start_factor to end_factor over total_iters.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: linear
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Initial multiplicative LR factor.
+start_factor: 0.1
+# Final multiplicative LR factor.
+end_factor: 1.0
+# Number of scheduler steps over which to interpolate.
+total_iters: 5
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

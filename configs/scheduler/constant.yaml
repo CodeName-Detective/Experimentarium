@@ -1,0 +1,17 @@
+# ConstantLR scheduler config.
+# Keeps LR at a multiplicative factor for total_iters before returning to base LR.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: constant
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Multiplicative factor applied to the optimizer base LR.
+factor: 1.0
+# Number of scheduler steps to keep the constant factor.
+total_iters: 1
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

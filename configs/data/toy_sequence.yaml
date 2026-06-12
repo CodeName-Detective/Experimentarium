@@ -1,0 +1,31 @@
+# Synthetic token-sequence classification dataset for transformer smoke tests.
+
+# Dataset registry key from src/data/dataset.py.
+name: toy_sequence
+# Seed for deterministic synthetic sample generation.
+seed: ${run.seed}
+# Sequence length generated for each example.
+seq_len: 16
+# Token vocabulary size used by generated token IDs.
+vocab_size: 128
+# Number of class labels in the dataset.
+num_classes: 2
+# Number of samples per dataloader batch.
+batch_size: 32
+# Number of subprocess workers for DataLoader.
+num_workers: 0
+# Whether DataLoader should pin CPU memory for faster CUDA transfer.
+pin_memory: false
+# Whether to drop the last incomplete training batch.
+drop_last: false
+# Per-split synthetic dataset sizes.
+splits:
+  # Training split used for gradient updates.
+  train:
+    num_samples: 256
+  # Validation split used for model selection and scheduler monitors.
+  val:
+    num_samples: 64
+  # Test split used for final held-out metrics and prediction export.
+  test:
+    num_samples: 64

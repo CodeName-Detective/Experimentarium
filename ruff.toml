@@ -1,0 +1,9 @@
+# Dedicated Ruff configuration for this template.
+# Keep lint/format settings here instead of pyproject.toml.
+
+line-length = 120
+target-version = "py310"
+
+[lint]
+select = ["E", "F", "B"]
+ignore = ["E501"]

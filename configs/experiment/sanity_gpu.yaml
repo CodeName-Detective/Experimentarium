@@ -1,0 +1,58 @@
+# @package _global_
+# Tiny GPU experiment used to validate CUDA setup and the full trainer path.
+
+defaults:
+  # Small MLP keeps the GPU smoke run fast.
+  - override /model: mlp
+  # Synthetic classification data avoids external dataset dependencies.
+  - override /data: toy_classification
+  # Classification task exercises loss and metric plumbing.
+  - override /task: classification
+  # No scheduler keeps LR behavior simple during sanity checks.
+  - override /scheduler: none
+
+# Runtime overrides for a minimal CUDA run.
+run:
+  # Experiment name included in the derived run id.
+  name: sanity_gpu
+  # Force CUDA so this experiment fails early if the GPU or driver is not usable.
+  device: cuda
+  # Use fp32 for broad GPU compatibility; override with run.precision=amp to test AMP.
+  precision: fp32
+
+# Sanity policy for GPU validation.
+sanity:
+  # Make required environment/runtime failures stop the run.
+  strict: true
+  cuda:
+    # Always check PyTorch CUDA build and NVIDIA driver compatibility.
+    check_driver: true
+    # If the GPU stack is unusable, fail instead of reporting a CPU-mode warning.
+    fail_on_cpu_mismatch: true
+
+# Trainer overrides for a short run.
+trainer:
+  # One epoch is enough to validate end-to-end GPU training.
+  max_epochs: 1
+  # Log every step so smoke-run progress is visible.
+  log_every_n_steps: 1
+
+# Data overrides that keep the GPU run small.
+data:
+  # Small batch size keeps memory usage low on older GPUs.
+  batch_size: 8
+  # Pin memory for CUDA transfer validation.
+  pin_memory: true
+  # Tiny synthetic split sizes for fast execution.
+  splits:
+    train:
+      num_samples: 32
+    val:
+      num_samples: 16
+    test:
+      num_samples: 16
+
+# Checkpoint overrides for the tiny run.
+checkpoint:
+  # Keep fewer recent checkpoints for sanity runs.
+  keep_last_k: 2

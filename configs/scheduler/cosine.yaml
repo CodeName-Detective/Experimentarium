@@ -1,0 +1,19 @@
+# CosineAnnealingLR scheduler config.
+# Smoothly anneals LR toward eta_min over the computed training horizon.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: cosine
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Minimum LR reached at the end of cosine annealing.
+eta_min: 1.0e-6
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false
+  # Number of warmup scheduler steps.
+  steps: 100
+  # Initial LR factor used at the start of warmup.
+  start_factor: 1.0e-4

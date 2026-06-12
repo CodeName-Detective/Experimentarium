@@ -1,0 +1,12 @@
+# SGD optimizer config.
+
+# Optimizer registry key from src/optim/optimizers.py.
+name: sgd
+# Base learning rate.
+lr: 0.1
+# Momentum factor for velocity updates.
+momentum: 0.9
+# L2 weight decay applied by SGD.
+weight_decay: 0.0
+# Enable Nesterov momentum when true.
+nesterov: false

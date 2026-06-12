@@ -1,0 +1,17 @@
+# MultiStepLR scheduler config.
+# Drops LR by gamma at explicit milestone epochs or steps.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: multistep
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Scheduler step indices where LR should drop.
+milestones: [30, 60, 90]
+# Multiplicative LR drop factor at each milestone.
+gamma: 0.1
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

@@ -1,0 +1,87 @@
+# Root Hydra config for the framework.
+# This file selects one config from each group and defines run-level settings.
+defaults:
+  # Model architecture config from configs/model/.
+  - model: mlp
+  # Dataset and dataloader config from configs/data/.
+  - data: toy_classification
+  # Task semantics config from configs/task/.
+  - task: classification
+  # Optimizer config from configs/optimizer/.
+  - optimizer: adamw
+  # Learning-rate scheduler config from configs/scheduler/.
+  - scheduler: cosine
+  # Trainer loop behavior from configs/trainer/.
+  - trainer: default
+  # Metric/artifact logger behavior from configs/logging/.
+  - logging: default
+  # Checkpoint save/resume policy from configs/checkpoint/.
+  - checkpoint: default
+  # Environment and smoke-test checks from configs/sanity/.
+  - sanity: default
+  # Disable Hydra's timestamp-based output/log folders; this framework writes run-scoped artifacts itself.
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+  # Keep this config's own values after group defaults so local run.* keys win.
+  - _self_
+
+# Runtime settings shared across training, evaluation, profiling, and sanity checks.
+run:
+  # Human-readable experiment name used in the derived run id.
+  name: default
+  # Repeat index included in the config hash. Change this for separate repeats of the same setup.
+  trial: 1
+  # Optional explicit base run id. Null means derive one from run.name, model/data/task, trial, and config hash.
+  id: null
+  # Execution mode consumed by src/main.py: train, eval, or test.
+  mode: train
+  # Base random seed for Python, NumPy, PyTorch, and dataloader workers.
+  seed: 42
+  # Requested device. Use cpu, cuda, cuda:0, or another torch.device string.
+  device: cpu
+  # Numeric precision policy: fp32, fp16, bf16, or amp.
+  precision: fp32
+  # Enable deterministic PyTorch behavior where possible; may reduce performance.
+  deterministic: false
+  # Distributed backend used when launched with torchrun.
+  distributed_backend: nccl
+  # Debug switch for future debug-only branches and verbose workflows.
+  debug: false
+  # Root directory for all generated run artifacts.
+  output_dir: outputs
+  # Parent directory for run-specific artifact folders. prepare_run resolves run.run_dir under this path.
+  runs_dir: outputs/runs
+  # Directory storing one resolved config snapshot per run id.
+  config_dir: outputs/run_configs
+  # JSONL registry mapping each run id to its resolved config and artifact directory.
+  config_registry: outputs/run_registry.jsonl
+  # Resolved by src.utils.run.prepare_run to outputs/runs/<run.id>. Existing ids are reused; fresh duplicates warn, training resumes do not.
+  run_dir: null
+  # Directory for Python logs and JSONL/TensorBoard metrics; resolved under run.run_dir.
+  log_dir: null
+  # Directory where evaluation prediction records are written; resolved under run.run_dir.
+  prediction_dir: null
+  # Maximum number of prediction records to export during evaluation/test.
+  prediction_limit: 100
+  # Directory where profiler traces are written by profiling workflows; resolved under run.run_dir.
+  profile_dir: null
+  # Path to the resolved config snapshot for this run; filled by prepare_run.
+  config_path: null
+  # Stable hash of the effective config used to derive the base run id; filled by prepare_run.
+  config_id: null
+
+# Deprecated aliases kept for older scripts. Prefer run.seed and run.device.
+seed: ${run.seed}
+device: ${run.device}
+
+# Hydra should not create timestamp-named run directories.
+# src.utils.run.prepare_run owns run ids, config snapshots, logs, checkpoints, and predictions.
+hydra:
+  # Do not write .hydra/config.yaml snapshots; resolved configs are stored in outputs/run_configs/.
+  output_subdir: null
+  run:
+    # Keep process working directory stable instead of using outputs/YYYY-MM-DD/HH-MM-SS.
+    dir: .
+  job:
+    # Prevent Hydra from changing cwd; all framework paths are resolved from the repo root.
+    chdir: false

@@ -1,0 +1,20 @@
+# Small transformer config for token-sequence classification.
+
+# Model registry key from src/models/model.py.
+name: small_transformer
+# Number of unique token IDs accepted by the embedding layer; resolved from the selected dataset.
+vocab_size: ${data.vocab_size}
+# Sequence length used by the synthetic sequence dataset.
+seq_len: ${data.seq_len}
+# Maximum supported positional-encoding length.
+max_len: 128
+# Transformer hidden size / embedding dimension.
+d_model: 64
+# Number of attention heads per transformer block.
+num_heads: 4
+# Number of transformer encoder blocks.
+num_layers: 2
+# Number of classification logits produced by the classifier head; resolved from the selected dataset.
+num_classes: ${data.num_classes}
+# Dropout probability in attention, feed-forward, and classifier layers.
+dropout: 0.1

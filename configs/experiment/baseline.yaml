@@ -1,0 +1,37 @@
+# @package _global_
+# Baseline MLP classification experiment.
+# Experiment configs override the root defaults and keep repeatable run recipes.
+
+defaults:
+  # Use the standard vector MLP architecture.
+  - override /model: mlp
+  # Use synthetic classification data.
+  - override /data: toy_classification
+  # Use classification loss, metrics, and prediction semantics.
+  - override /task: classification
+  # Use AdamW as the baseline optimizer.
+  - override /optimizer: adamw
+  # Use cosine LR decay for the baseline schedule.
+  - override /scheduler: cosine
+
+# Trainer overrides for this experiment.
+trainer:
+  # Number of epochs in the baseline run.
+  max_epochs: 5
+
+# Optimizer overrides for this experiment.
+optimizer:
+  # Baseline learning rate.
+  lr: 1.0e-3
+
+# Model overrides for this experiment.
+model:
+  # Hidden width of the MLP layers.
+  hidden_dim: 64
+  # Dropout probability between MLP layers.
+  dropout: 0.1
+
+# Run identity override for this preset.
+run:
+  # Experiment name included in the derived run id.
+  name: baseline

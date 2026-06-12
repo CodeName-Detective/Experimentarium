@@ -1,0 +1,16 @@
+# AdamW optimizer config.
+
+# Optimizer registry key from src/optim/optimizers.py.
+name: adamw
+# Base learning rate for all parameter groups unless overridden by grouping logic.
+lr: 1.0e-3
+# Decoupled weight decay applied by AdamW.
+weight_decay: 1.0e-4
+# Exclude normalization parameters and biases from weight decay.
+no_decay_norm_bias: true
+# Adam beta coefficients for first and second moment estimates.
+betas: [0.9, 0.999]
+# Optional torch foreach implementation flag. Null lets PyTorch choose.
+foreach: null
+# Optional fused AdamW implementation flag. Null lets PyTorch choose.
+fused: null

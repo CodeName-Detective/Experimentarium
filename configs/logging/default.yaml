@@ -1,0 +1,33 @@
+# Default logging configuration.
+# JSONL is enabled for local reproducibility; TensorBoard and W&B are optional.
+
+# JSON Lines metric logger. Good for scripts, notebooks, and postprocessing.
+jsonl:
+  # Enable local metrics.jsonl logging.
+  enabled: true
+  # File path for structured metric records. prepare_run rewrites this to run.run_dir/logs/metrics.jsonl.
+  path: outputs/logs/metrics.jsonl
+
+# TensorBoard logger. Requires installing the tracking extra.
+tensorboard:
+  # Enable TensorBoard scalar logging.
+  enabled: false
+  # Directory consumed by tensorboard --logdir. prepare_run rewrites this under run.run_dir/logs/.
+  log_dir: outputs/logs/tensorboard
+
+# Weights & Biases logger. Requires installing the tracking extra and wandb login.
+wandb:
+  # Enable W&B experiment tracking.
+  enabled: false
+  # W&B project name.
+  project: ml-template
+  # Optional W&B entity/team. Null uses the default account.
+  entity: null
+  # Optional explicit W&B run name. Null means prepare_run uses the derived run.id.
+  run_name: null
+  # Optional W&B tags for grouping and filtering runs.
+  tags: []
+  # Optional run notes shown in W&B.
+  notes: ''
+  # W&B mode: online, offline, or disabled.
+  mode: online

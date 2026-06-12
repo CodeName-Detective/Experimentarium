@@ -1,0 +1,45 @@
+# Sanity-check policy used by scripts/run_sanity.py and src/main.py.
+# Python and package version requirements are read from pyproject.toml.
+
+# If true, failures raise immediately. If false, warnings are reported but execution can continue.
+strict: false
+# Run a tiny model/loss/backward/optimizer/scheduler smoke test.
+run_model_smoke: true
+# Compose every configs/experiment/*.yaml preset during sanity checks.
+check_all_experiments: false
+# Minimum free disk space required under the output location.
+min_disk_gb: 1.0
+# CUDA compatibility checks for PyTorch CUDA builds and NVIDIA drivers.
+cuda:
+  # auto checks when run.device is cuda or PyTorch was installed with CUDA; use true to always check or false to disable.
+  check_driver: auto
+  # If false, CUDA/PyTorch driver mismatches are warnings in CPU-mode sanity and failures only when run.device=cuda.
+  fail_on_cpu_mismatch: false
+# PyTorch installation recommendation command output.
+torch_install:
+  # If true, sanity prints recommended UV and pip install commands based on pyproject Python, GPU, and driver.
+  recommend: false
+# Weights & Biases readiness checks.
+wandb:
+  # auto checks only when logging.wandb.enabled=true; use true to force checks or false to disable.
+  check: auto
+  # auto checks network reachability when W&B checks are active and mode is online; false skips internet probing.
+  check_connectivity: auto
+  # TCP connection timeout in seconds for api.wandb.ai or WANDB_BASE_URL.
+  timeout_seconds: 5.0
+# Config keys expected to exist in the composed Hydra config.
+required_config_keys:
+  - run.id
+  - run.config_id
+  - run.run_dir
+  - run.seed
+  - run.device
+  - run.precision
+  - data.name
+  - model.name
+  - task.name
+  - optimizer.name
+  - scheduler.name
+  - trainer.max_epochs
+  - checkpoint.dir
+  - checkpoint.monitor

@@ -1,0 +1,9 @@
+# No-op scheduler config.
+# Use this for debugging, sanity checks, or runs where LR should stay fixed.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: none
+# Scheduler stepping cadence. Kept for consistent scheduler config shape.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss

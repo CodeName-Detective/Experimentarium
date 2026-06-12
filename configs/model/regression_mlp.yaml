@@ -1,0 +1,14 @@
+# MLP model config for vector regression.
+
+# Model registry key. Reuses the MLP class with output_dim for regression.
+name: mlp
+# Number of input features expected in batch['input']; resolved from the selected dataset.
+input_dim: ${data.input_dim}
+# Width of hidden linear layers.
+hidden_dim: 64
+# Number of hidden blocks in the MLP.
+num_layers: 2
+# Number of regression outputs produced by the final layer; resolved from the selected dataset.
+output_dim: ${data.output_dim}
+# Dropout probability applied between hidden layers.
+dropout: 0.1

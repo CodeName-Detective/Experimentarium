@@ -1,0 +1,29 @@
+# @package _global_
+# Transformer-head ablation example on synthetic sequence classification.
+
+defaults:
+  # Use the small transformer architecture.
+  - override /model: small_transformer
+  # Use synthetic token sequences.
+  - override /data: toy_sequence
+  # Use standard classification task semantics.
+  - override /task: classification
+  # AdamW is a common transformer optimizer baseline.
+  - override /optimizer: adamw
+  # Cosine schedule gives smooth LR decay for the ablation.
+  - override /scheduler: cosine
+
+# Model overrides for this ablation.
+model:
+  # Number of attention heads to test in this run.
+  num_heads: 4
+
+# Trainer overrides for a short ablation run.
+trainer:
+  # Number of epochs for this ablation preset.
+  max_epochs: 3
+
+# Run identity override for this preset.
+run:
+  # Experiment name included in the derived run id.
+  name: ablation_heads

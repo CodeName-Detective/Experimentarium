@@ -1,0 +1,46 @@
+# @package _global_
+# Tiny CPU experiment used for new-machine sanity checks and quick smoke tests.
+
+defaults:
+  # Small MLP keeps the smoke run fast.
+  - override /model: mlp
+  # Synthetic classification data avoids external dataset dependencies.
+  - override /data: toy_classification
+  # Classification task exercises loss and metric plumbing.
+  - override /task: classification
+  # No scheduler keeps LR behavior simple during sanity checks.
+  - override /scheduler: none
+
+# Runtime overrides for a deterministic CPU-only smoke run.
+run:
+  # Experiment name included in the derived run id.
+  name: sanity_cpu
+  # Force CPU so this experiment works on machines without CUDA.
+  device: cpu
+  # Use full precision for broad compatibility.
+  precision: fp32
+
+# Trainer overrides for a short run.
+trainer:
+  # One epoch is enough to validate end-to-end training.
+  max_epochs: 1
+  # Log every step so smoke-run progress is visible.
+  log_every_n_steps: 1
+
+# Data overrides that keep the smoke run small.
+data:
+  # Small batch size to reduce memory and runtime.
+  batch_size: 8
+  # Tiny synthetic split sizes for fast execution.
+  splits:
+    train:
+      num_samples: 32
+    val:
+      num_samples: 16
+    test:
+      num_samples: 16
+
+# Checkpoint overrides for the tiny run.
+checkpoint:
+  # Keep fewer recent checkpoints for sanity runs.
+  keep_last_k: 2

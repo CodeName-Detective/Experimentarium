@@ -1,0 +1,15 @@
+# ExponentialLR scheduler config.
+# Multiplies LR by gamma each scheduler step for smooth monotonic decay.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: exponential
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Multiplicative decay applied every scheduler step.
+gamma: 0.95
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

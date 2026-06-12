@@ -1,0 +1,99 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+wheels/
+
+# =========================
+# Virtual environments
+# =========================
+.venv/
+venv/
+env/
+
+# =========================
+# Environment / secrets
+# =========================
+.env
+.env.*
+!.env.example
+secrets/
+*.secret
+
+# =========================
+# Outputs / generated artifacts
+# =========================
+outputs/
+logs/
+runs/
+multirun/
+*.log
+
+# Hydra generated folders, if created outside outputs/
+.hydra/
+
+# =========================
+# ML checkpoints / models
+# =========================
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.pkl
+*.pickle
+
+# =========================
+# Data
+# =========================
+# Uncomment these only if data should not be committed
+# data/raw/
+# data/processed/
+# data/interim/
+# data/external/
+
+# =========================
+# Notebooks
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Tool caches
+# =========================
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.hypothesis/
+
+# =========================
+# Experiment tracking
+# =========================
+wandb/
+mlruns/
+lightning_logs/
+tensorboard/
+events.out.tfevents.*
+
+# =========================
+# IDE / editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db

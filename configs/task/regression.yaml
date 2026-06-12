@@ -1,0 +1,16 @@
+# Regression task config.
+
+# Task registry key from src/tasks/task.py.
+name: regression
+# Key in model output dict that contains continuous predictions.
+output_key: logits
+# Key in batch dict that contains continuous targets.
+target_key: label
+# Loss configuration passed to src/losses/build_loss.
+loss:
+  # Loss registry key.
+  name: mse
+# Metric registry keys computed by the task.
+metrics:
+  - mse
+  - mae

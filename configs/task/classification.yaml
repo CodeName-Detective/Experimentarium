@@ -1,0 +1,17 @@
+# Single-label classification task config.
+
+# Task registry key from src/tasks/task.py.
+name: classification
+# Key in model output dict that contains class logits.
+output_key: logits
+# Key in batch dict that contains integer class labels.
+target_key: label
+# Loss configuration passed to src/losses/build_loss.
+loss:
+  # Loss registry key.
+  name: cross_entropy
+  # Label-smoothing factor for CrossEntropyLoss.
+  label_smoothing: 0.0
+# Metric registry keys computed by the task.
+metrics:
+  - accuracy

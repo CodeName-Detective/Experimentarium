@@ -1,0 +1,24 @@
+# File-backed tensor dataset config.
+# Generate these toy files with: bash scripts/preprocess.sh --force
+
+# Dataset registry key from src/data/dataset.py.
+name: tensor_file
+# Number of samples per dataloader batch.
+batch_size: 32
+# Number of subprocess workers for DataLoader.
+num_workers: 4
+# Whether DataLoader should pin CPU memory for faster CUDA transfer.
+pin_memory: true
+# Whether to drop the last incomplete training batch.
+drop_last: false
+# Per-split file paths. Each file should contain a list of sample dictionaries.
+splits:
+  # Training split used for gradient updates.
+  train:
+    path: data/processed/train.pt
+  # Validation split used for model selection and scheduler monitors.
+  val:
+    path: data/processed/val.pt
+  # Test split used for final held-out metrics and prediction export.
+  test:
+    path: data/processed/test.pt

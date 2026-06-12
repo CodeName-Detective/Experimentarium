@@ -1,0 +1,31 @@
+# @package _global_
+# Regression experiment selecting regression-compatible model, data, and task.
+
+defaults:
+  # MLP variant with output_dim instead of num_classes.
+  - override /model: regression_mlp
+  # Synthetic regression targets.
+  - override /data: toy_regression
+  # Regression task uses MSE loss and regression metrics.
+  - override /task: regression
+  # AdamW optimizer for the regression baseline.
+  - override /optimizer: adamw
+  # Cosine LR schedule for smooth decay.
+  - override /scheduler: cosine
+
+# Checkpoint metric overrides for regression.
+checkpoint:
+  # Monitor validation MSE instead of classification loss.
+  monitor: val/mse
+  # Lower MSE is better.
+  mode: min
+
+# Trainer overrides for this experiment.
+trainer:
+  # Number of epochs in the regression preset.
+  max_epochs: 5
+
+# Run identity override for this preset.
+run:
+  # Experiment name included in the derived run id.
+  name: regression

@@ -1,0 +1,20 @@
+# Default trainer-loop configuration.
+
+# Number of training epochs.
+max_epochs: 5
+# Number of batches to accumulate before each optimizer step.
+accumulate_grad_batches: 1
+# Gradient clipping norm. Set null to disable clipping.
+grad_clip: 1.0
+# Log training step metrics every N optimizer/global steps.
+log_every_n_steps: 10
+# Run validation every N epochs.
+val_every_n_epochs: 1
+# Fail fast if loss becomes NaN or infinite.
+check_finite_loss: true
+# Enable torch.autograd anomaly detection for debugging backward failures.
+detect_anomaly: false
+# Early-stopping policy based on checkpoint.monitor improvement.
+early_stopping:
+  # Number of non-improving validation checks allowed before stopping.
+  patience: 10

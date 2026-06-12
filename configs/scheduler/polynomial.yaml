@@ -1,0 +1,15 @@
+# PolynomialLR scheduler config.
+# Decays LR polynomially over the computed training horizon.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: polynomial
+# Step scheduler once per epoch or once per optimizer step.
+interval: epoch
+# Metric name used by monitor-aware scheduler utilities.
+monitor: val/loss
+# Polynomial power. Higher values decay more aggressively near the end.
+power: 1.0
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

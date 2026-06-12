@@ -1,0 +1,14 @@
+# MLP model config for vector classification.
+
+# Model registry key from src/models/model.py.
+name: mlp
+# Number of input features expected in batch['input']; resolved from the selected dataset.
+input_dim: ${data.input_dim}
+# Width of hidden linear layers.
+hidden_dim: 64
+# Number of hidden blocks in the MLP.
+num_layers: 2
+# Number of classification logits produced by the final layer; resolved from the selected dataset.
+num_classes: ${data.num_classes}
+# Dropout probability applied between hidden layers.
+dropout: 0.1

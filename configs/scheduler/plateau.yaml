@@ -1,0 +1,23 @@
+# ReduceLROnPlateau scheduler config.
+# Reduces LR when the monitored validation metric stops improving.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: plateau
+# Plateau is usually stepped once per validation epoch with the monitored metric.
+interval: epoch
+# Metric passed into ReduceLROnPlateau.step(metric).
+monitor: val/loss
+# Direction for improvement: min for loss, max for score.
+mode: min
+# Multiplicative LR reduction factor.
+factor: 0.5
+# Number of bad validation checks before reducing LR.
+patience: 5
+# Minimum significant improvement threshold.
+threshold: 1.0e-4
+# Lower bound for LR after reductions.
+min_lr: 0.0
+# Optional linear warmup wrapper applied before the main schedule.
+warmup:
+  # Enable or disable warmup for this scheduler.
+  enabled: false

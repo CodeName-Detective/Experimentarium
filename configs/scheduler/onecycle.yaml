@@ -1,0 +1,15 @@
+# OneCycleLR scheduler config.
+# Ramps LR up and then down within one training run; normally stepped per batch.
+
+# Scheduler registry key from src/optim/schedulers.py.
+name: onecycle
+# OneCycleLR should usually step after each optimizer update.
+interval: step
+# Metric name kept for consistent scheduler config shape.
+monitor: val/loss
+# Peak learning rate reached during the cycle.
+max_lr: 1.0e-3
+# Fraction of total steps spent increasing LR.
+pct_start: 0.3
+# Annealing shape after the warmup phase: cos or linear.
+anneal_strategy: cos

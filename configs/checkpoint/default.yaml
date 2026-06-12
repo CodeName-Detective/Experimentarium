@@ -1,0 +1,22 @@
+# Default checkpoint policy used by the Trainer and CheckpointManager.
+# Checkpoints are generated artifacts and should stay under ignored output paths.
+
+# Directory where epoch checkpoints, last.pt, best.pt, and manifest.json are written.
+# prepare_run rewrites this to run.run_dir/checkpoints for run isolation.
+dir: outputs/checkpoints
+# Save an epoch checkpoint every N epochs.
+save_every: 1
+# Keep at most this many recent epoch checkpoints after rotation.
+keep_last_k: 5
+# Maintain a last.pt pointer to the latest checkpoint.
+save_last: true
+# Number of best monitored checkpoints to retain. Set 0 to disable best retention.
+save_top_k: 1
+# Save an emergency checkpoint if training raises an exception.
+save_on_exception: true
+# Metric key used to decide best checkpoint and early-stopping improvement.
+monitor: val/loss
+# Direction for the monitored metric: min for losses, max for scores.
+mode: min
+# Resume source: null for fresh run, latest/last, best, an epoch number such as 5 or epoch_0005, or a .pt path.
+resume: null
