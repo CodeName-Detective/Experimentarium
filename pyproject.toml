@@ -1,28 +1,61 @@
 [project]
-name = "ml-template"
+name = "test-copy"
 version = "0.1.0"
-description = "Research-grade PyTorch experiment template"
-requires-python = ">=3.10"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
 dependencies = [
-  "torch>=2.2",
-  "numpy>=1.24",
+  "torch==2.5.1",
+  "torchvision==0.20.1",
+  "torchaudio==2.5.1",
+
   "hydra-core>=1.3",
-  "omegaconf>=2.3",
   "tqdm>=4.66",
   "rich>=13.0",
+
+  "torch-geometric",
+
+  "pyg-lib==0.4.0+pt25cu121",
+  "torch-scatter==2.1.2+pt25cu121",
+  "torch-sparse==0.6.18+pt25cu121",
+  "torch-cluster==1.6.3+pt25cu121",
+  "torch-spline-conv==1.2.2+pt25cu121",
 ]
 
 [project.optional-dependencies]
-tracking = ["wandb>=0.16", "tensorboard>=2.15"]
-vision = ["torchvision>=0.17"]
-dev = ["pytest>=7", "pytest-cov>=4", "ruff>=0.4", "mypy>=1.8"]
+tracking = [
+  "tensorboard>=2.15",
+  "wandb>=0.16",
+]
 
-[project.scripts]
-ml-train = "src.main:main"
-ml-sanity = "scripts.run_sanity:main"
+[dependency-groups]
+dev = [
+  "mypy>=1.8",
+  "pytest>=7",
+  "pytest-cov>=4",
+  "ruff>=0.4",
+]
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["."]
-addopts = "-p no:launch_testing -p no:launch_testing_ros"
+[tool.uv]
+environments = [
+  "sys_platform == 'linux'",
+]
+find-links = [
+  "https://data.pyg.org/whl/torch-2.5.1+cu121.html",
+]
 
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
+]
+torchaudio = [
+  { index = "pytorch-cu121", marker = "sys_platform == 'linux'" },
+]
