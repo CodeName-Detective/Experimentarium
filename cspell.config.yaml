@@ -1,0 +1,145 @@
+version: "0.2"
+language: en,en-US
+caseSensitive: false
+useGitignore: true
+
+# Generated files, dependency environments, caches, and binary artifacts are
+# not maintained prose and should not contribute spelling diagnostics.
+ignorePaths:
+  - "**/.git/**"
+  - "**/.venv/**"
+  - "**/__pycache__/**"
+  - "**/.mypy_cache/**"
+  - "**/.pytest_cache/**"
+  - "**/.ruff_cache/**"
+  - "**/pytest-cache-files-*/**"
+  - "data/**"
+  - "outputs/**"
+  - "uv.lock"
+  - "**/*.pdf"
+
+# Enable dictionaries that apply throughout an AI/ML research repository.
+dictionaries:
+  - softwareTerms
+  - coding-compound-terms
+  - computing-acronyms
+  - data-science
+  - data-science-models
+  - data-science-tools
+
+# Apply language-specific dictionaries only to files where they are relevant.
+overrides:
+  - filename: "**/*.py"
+    dictionaries:
+      - python
+      - python-common
+  - filename:
+      - "**/*.sh"
+      - "**/*.bash"
+    dictionaries:
+      - bash
+      - shellscript
+  - filename: "**/Makefile"
+    dictionaries:
+      - makefile
+
+# Valid project names, AI/ML terminology, library names, configuration keys,
+# environment variables, and intentional code abbreviations.
+words:
+  - accum
+  - adamw
+  - argmax
+  - autocast
+  - autograd
+  - bfloat
+  - Cabe
+  - cfgs
+  - chdir
+  - chdirs
+  - checkpointing
+  - ckpts
+  - compileall
+  - conftest
+  - conv
+  - cuda
+  - cudnn
+  - dataloaders
+  - datetimez
+  - dedented
+  - docstrings
+  - dryrun
+  - dtype
+  - Experimentarium
+  - GELU
+  - gethostname
+  - getitem
+  - getpid
+  - gloo
+  - hcfg
+  - hyperband
+  - hyperparameters
+  - hyperparams
+  - inspectable
+  - ipykernel
+  - ipynb
+  - isort
+  - logdir
+  - logits
+  - mccabe
+  - mult
+  - multimodal
+  - multirun
+  - multistep
+  - mydb
+  - mypackage
+  - mypy
+  - mysecretkey
+  - nccl
+  - Nesterov
+  - netrc
+  - nhead
+  - noheader
+  - noqa
+  - numpy
+  - omegaconf
+  - onecycle
+  - optim
+  - pathlib
+  - Perflint
+  - pipefail
+  - polynomially
+  - prec
+  - preds
+  - pycache
+  - Pycodestyle
+  - pydoclint
+  - pydocstyle
+  - Pyflakes
+  - Pygrep
+  - Pylint
+  - pyproject
+  - pytest
+  - PYTHONHASHSEED
+  - PYTHONPATH
+  - pyupgrade
+  - randn
+  - redef
+  - rmse
+  - rmsprop
+  - rulebook
+  - Sched
+  - subkeys
+  - subpackages
+  - tensorboard
+  - torchaudio
+  - torchrun
+  - torchvision
+  - tqdm
+  - unreviewable
+  - venv
+  - wandb
+  - writability
+
+# Keep this empty so genuine misspellings are reported instead of silently
+# ignored without being recognized as valid repository vocabulary.
+ignoreWords: []
