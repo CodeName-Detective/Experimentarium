@@ -1,0 +1,16 @@
+# Learning-to-rank task config.
+# Implemented by src/tasks/ranking.py.
+
+# Task registry key.
+name: ranking
+# Key in the model output dict containing item scores.
+output_key: scores
+# Key in the batch dict containing relevance labels.
+target_key: relevance
+# Default pointwise ranking objective; replace for pairwise or listwise ranking.
+loss:
+  name: mse
+# Built-in pointwise score metrics.
+metrics:
+  - mse
+  - mae

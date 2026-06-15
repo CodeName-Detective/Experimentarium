@@ -45,6 +45,7 @@ def build_dataloaders(cfg) -> dict[str, DataLoader]:
             shuffle=(split == 'train' and sampler is None),
             sampler=sampler,
             num_workers=num_workers,
+            collate_fn=getattr(dataset, 'collate_fn', None),
             pin_memory=pin_memory,
             drop_last=bool(cfg_get(data_cfg, 'drop_last', False) and split == 'train'),
             worker_init_fn=seed_worker if num_workers > 0 else None,

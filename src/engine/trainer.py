@@ -27,6 +27,7 @@ import torch
 
 from src.callbacks import Callback, CallbackList
 from src.engine.evaluator import Evaluator, move_to_device
+from src.engine.precision import amp_dtype, amp_enabled, precision_autocast, scaler_enabled
 from src.optim.schedulers import SchedulerBundle, scheduler_step
 from src.utils.checkpoint import CheckpointManager, get_rng_state
 from src.utils.config import cfg_get, config_to_dict
@@ -79,9 +80,9 @@ class Trainer:
         self.detect_anomaly = bool(cfg_get(cfg, 'trainer.detect_anomaly', False))
         self.save_on_exception = bool(cfg_get(cfg, 'checkpoint.save_on_exception', True))
         self.precision = str(cfg_get(cfg, 'run.precision', 'fp32'))
-        self.use_amp = self.device.type == 'cuda' and self.precision in {'fp16', 'bf16', 'amp'}
-        self.amp_dtype = torch.bfloat16 if self.precision == 'bf16' else torch.float16
-        self.scaler = torch.amp.GradScaler('cuda', enabled=self.use_amp and self.precision != 'bf16')
+        self.use_amp = amp_enabled(self.device, self.precision)
+        self.amp_dtype = amp_dtype(self.precision)
+        self.scaler = torch.amp.GradScaler('cuda', enabled=scaler_enabled(self.device, self.precision))
         self.global_step = 0
         self.start_epoch = 1
         self.current_epoch = 0
@@ -108,7 +109,7 @@ class Trainer:
                     train_metrics = self.train_epoch(epoch)
                     metrics = dict(train_metrics)
                     if epoch % self.val_every_n_epochs == 0 and 'val' in self.loaders:
-                        evaluator = Evaluator(self.model, self.task, self.device)
+                        evaluator = Evaluator(self.model, self.task, self.device, precision=self.precision)
                         metrics.update(evaluator.evaluate(self.loaders['val'], prefix='val'))
                         self.callbacks.call('on_validation_end', self, metrics)
                     self.loggers.log_metrics(metrics, step=epoch)
@@ -139,7 +140,7 @@ class Trainer:
         num_batches = len(self.loaders['train'])
         for batch_idx, batch in enumerate(self.loaders['train'], start=1):
             batch = move_to_device(batch, self.device)
-            with torch.amp.autocast(device_type=self.device.type, enabled=self.use_amp, dtype=self.amp_dtype):
+            with precision_autocast(self.device, self.precision):
                 result = self.task.step(self.model, batch, stage='train')
                 if result.loss is None:
                     raise RuntimeError('Task returned no loss during training')
@@ -173,7 +174,7 @@ class Trainer:
 
     def test(self) -> dict[str, float]:
         """Run test evaluation with the current model state."""
-        evaluator = Evaluator(self.model, self.task, self.device)
+        evaluator = Evaluator(self.model, self.task, self.device, precision=self.precision)
         return evaluator.evaluate(self.loaders['test'], prefix='test')
 
     def resume(self) -> None:

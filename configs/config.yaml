@@ -51,12 +51,16 @@ run:
   output_dir: outputs
   # Parent directory for run-specific artifact folders. prepare_run resolves run.run_dir under this path.
   runs_dir: outputs/runs
+  # Parent directory for evaluation artifacts. Eval mode resolves run.run_dir to outputs/evaluations/<run.id>.
+  evaluations_dir: outputs/evaluations
   # Directory storing one resolved config snapshot per run id.
   config_dir: outputs/run_configs
   # JSONL registry mapping each run id to its resolved config and artifact directory.
   config_registry: outputs/run_registry.jsonl
-  # Resolved by src.utils.run.prepare_run to outputs/runs/<run.id>. Existing ids are reused; fresh duplicates warn, training resumes do not.
+  # Resolved to outputs/runs/<run.id> for training or outputs/evaluations/<run.id> for evaluation.
   run_dir: null
+  # External tracking id. Evaluation keeps run.id but uses <run.id>_evaluation to avoid merging tracker runs.
+  tracking_id: null
   # Directory for Python logs and JSONL/TensorBoard metrics; resolved under run.run_dir.
   log_dir: null
   # Directory where evaluation prediction records are written; resolved under run.run_dir.
@@ -65,7 +69,7 @@ run:
   prediction_limit: 100
   # Directory where profiler traces are written by profiling workflows; resolved under run.run_dir.
   profile_dir: null
-  # Path to the resolved config snapshot for this run; filled by prepare_run.
+  # Training configs use outputs/run_configs/<run.id>.yaml; evaluation configs live under run.run_dir/config.yaml.
   config_path: null
   # Stable hash of the effective config used to derive the base run id; filled by prepare_run.
   config_id: null

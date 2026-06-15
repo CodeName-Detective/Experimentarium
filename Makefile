@@ -1,7 +1,9 @@
 .PHONY: install train eval sanity test test-cov lint fmt clean
 
 install:
-	uv sync --extra dev
+	uv sync
+	uv sync --all-extras
+	uv sync --extra tracking
 
 train:
 	uv run python src/main.py $(ARGS)

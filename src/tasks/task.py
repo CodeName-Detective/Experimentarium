@@ -31,7 +31,7 @@ class StepResult:
 
     loss: Tensor | None = None
     metrics: dict[str, float] = field(default_factory=dict)
-    outputs: dict[str, Tensor] = field(default_factory=dict)
+    outputs: dict[str, Any] = field(default_factory=dict)
     targets: Tensor | None = None
     artifacts: dict[str, Any] = field(default_factory=dict)
 
@@ -46,7 +46,7 @@ class BaseTask:
         metric_names = list(cfg_get(cfg, 'metrics', []) or [])
         self.metrics = MetricCollection.from_names(metric_names)
 
-    def step(self, model: nn.Module, batch: dict[str, Tensor], stage: str) -> StepResult:
+    def step(self, model: nn.Module, batch: dict[str, Any], stage: str) -> StepResult:
         """Compute loss, outputs, and metric inputs for one batch."""
         raise NotImplementedError
 
@@ -58,7 +58,7 @@ class BaseTask:
         """Compute accumulated task metrics."""
         return self.metrics.compute()
 
-    def predict_records(self, outputs: dict[str, Tensor], batch: dict[str, Tensor]) -> list[dict[str, Any]]:
+    def predict_records(self, outputs: dict[str, Any], batch: dict[str, Any]) -> list[dict[str, Any]]:
         """Convert model outputs into serializable prediction records."""
         return []
 

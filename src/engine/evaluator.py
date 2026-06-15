@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from src.engine.precision import precision_autocast
 from src.runtime.distributed import mean_dict
 
 if TYPE_CHECKING:
@@ -26,21 +27,37 @@ if TYPE_CHECKING:
 Batch = dict[str, Any]
 
 
+def _move_value_to_device(value: Any, device: torch.device | str) -> Any:
+    if torch.is_tensor(value):
+        return value.to(device, non_blocking=True)
+    if isinstance(value, dict):
+        return {key: _move_value_to_device(item, device) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_move_value_to_device(item, device) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_move_value_to_device(item, device) for item in value)
+    return value
+
+
 def move_to_device(batch: Batch, device: torch.device | str) -> Batch:
-    """Move a flat tensor batch dictionary to a device."""
-    moved: Batch = {}
-    for key, value in batch.items():
-        moved[key] = value.to(device, non_blocking=True) if torch.is_tensor(value) else value
-    return moved
+    """Recursively move tensors in a batch dictionary to a device."""
+    return {key: _move_value_to_device(value, device) for key, value in batch.items()}
 
 
 class Evaluator:
     """Task-aware evaluator for validation, test, and prediction."""
 
-    def __init__(self, model: torch.nn.Module, task: BaseTask, device: torch.device | str = 'cpu') -> None:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        task: BaseTask,
+        device: torch.device | str = 'cpu',
+        precision: str = 'fp32',
+    ) -> None:
         self.model = model
         self.task = task
         self.device = torch.device(device)
+        self.precision = precision
 
     @torch.no_grad()
     def evaluate(self, loader: Iterable[Batch], prefix: str = 'val') -> dict[str, float]:
@@ -48,17 +65,18 @@ class Evaluator:
         self.model.eval()
         self.task.reset_metrics()
         total_loss = 0.0
-        total_count = 0
+        loss_count = 0
         for batch in loader:
             batch = move_to_device(batch, self.device)
-            result = self.task.step(self.model, batch, stage=prefix)
+            with precision_autocast(self.device, self.precision):
+                result = self.task.step(self.model, batch, stage=prefix)
             batch_size = int(result.targets.shape[0]) if result.targets is not None else 1
             if result.loss is not None:
                 total_loss += float(result.loss.detach().cpu()) * batch_size
-            total_count += batch_size
+                loss_count += batch_size
         metrics = self.task.compute_metrics()
-        if total_count:
-            metrics['loss'] = total_loss / total_count
+        if loss_count:
+            metrics['loss'] = total_loss / loss_count
         metrics = mean_dict(metrics, device=self.device)
         return {f'{prefix}/{key}': value for key, value in metrics.items()}
 
@@ -69,7 +87,8 @@ class Evaluator:
         records: list[dict[str, Any]] = []
         for batch in loader:
             batch = move_to_device(batch, self.device)
-            outputs = self.model(batch)
+            with precision_autocast(self.device, self.precision):
+                outputs = self.model(batch)
             records.extend(self.task.predict_records(outputs, batch))
             if limit is not None and len(records) >= limit:
                 return records[:limit]

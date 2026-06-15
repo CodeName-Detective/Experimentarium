@@ -92,7 +92,7 @@ def main(cfg: DictConfig) -> None:
             test_metrics = trainer.test()
         elif mode == 'eval':
             trainer.resume()
-            evaluator = Evaluator(trainer.model, task, trainer.device)
+            evaluator = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision)
             test_metrics = evaluator.evaluate(loaders['test'], prefix='test')
         else:
             raise ValueError(f'Unknown run.mode={mode}')
@@ -101,7 +101,9 @@ def main(cfg: DictConfig) -> None:
         prediction_limit = int(cfg_get(cfg, 'run.prediction_limit', 100))
         pred_path = Path(str(cfg_get(cfg, 'run.prediction_dir', 'outputs/predictions'))) / 'test_predictions.json'
         pred_path.parent.mkdir(parents=True, exist_ok=True)
-        records = Evaluator(trainer.model, task, trainer.device).predict(loaders['test'], limit=prediction_limit)
+        records = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision).predict(
+            loaders['test'], limit=prediction_limit
+        )
         pred_path.write_text(json.dumps(records, indent=2), encoding='utf-8')
     finally:
         loggers.finish()

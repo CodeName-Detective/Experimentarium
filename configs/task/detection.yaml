@@ -1,0 +1,17 @@
+# Object detection task config.
+# Implemented by src/tasks/detection.py.
+
+# Task registry key.
+name: detection
+# Key in the model output dict containing predicted boxes, labels, and scores.
+output_key: detections
+# Key in the batch dict containing per-image detection targets.
+target_key: targets
+# Detection models commonly return a dictionary of component losses directly.
+loss: null
+# Detection metrics are optional; register and add metrics such as mAP when needed.
+metrics: []
+# Score threshold used by the detection task when exporting predictions.
+score_threshold: 0.05
+# IoU threshold used by the detection task for non-maximum suppression.
+nms_iou_threshold: 0.5

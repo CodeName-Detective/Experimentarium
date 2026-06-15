@@ -30,13 +30,14 @@ flowchart TD
     MakeTargets --> SanityScript
 
     ShellPreprocess --> Preprocess[src/data/preprocess.py]
-    ShellProfile --> ProfileInline[Profiler workload in scripts/profile.sh]
+    ShellProfile --> ProfileConfig[Load configs/profiler.yaml]
+    ProfileConfig --> ProfileInline[Profiler workload in scripts/profile.sh]
     ShellSweep --> WandBSweep[wandb sweep configs/sweep.yaml]
 
     SanityScript --> SanityFlow[Sanity-only flow]
     Main --> MainFlow[Train / Eval flow]
     Preprocess --> TensorFiles[data/processed/*.pt]
-    ProfileInline --> ProfileOutputs["outputs/runs/<run_id>/profiles or outputs/profiles"]
+    ProfileInline --> ProfileOutputs["profiler.trace_dir, default outputs/profiles"]
     WandBSweep --> Main
 ```
 
@@ -46,7 +47,7 @@ Notes:
 - `scripts/eval.sh` calls `src/main.py` with `run.mode=eval` and `checkpoint.resume=<path>`.
 - `scripts/run_sanity.py` only performs environment/config/smoke validation; it does not train.
 - `scripts/preprocess.sh` generates toy tensor-file data for `data=tensor_file`.
-- `scripts/profile.sh` runs a small profiler workload outside the main trainer.
+- `scripts/profile.sh` loads `configs/profiler.yaml` and runs a small profiler workload outside the main trainer.
 - `scripts/sweep.sh` creates a W&B sweep from `configs/sweep.yaml`, then each W&B agent run calls `src/main.py`.
 - `Makefile` targets mostly forward to the same Python or shell entrypoints.
 
@@ -60,10 +61,10 @@ flowchart TD
     Compose --> DDP[setup_from_env: initialize DDP if torchrun env exists]
     DDP --> RunIdentity[src.utils.run.prepare_run]
 
-    RunIdentity --> RunID[derive config_id and base run_id, then suffix if artifacts exist]
-    RunIdentity --> Paths[rewrite run-scoped paths]
-    RunIdentity --> ConfigSnapshot["write outputs/run_configs/<run_id>.yaml"]
-    RunIdentity --> RegistryMap[append outputs/run_registry.jsonl]
+    RunIdentity --> RunID[derive config_id and stable run_id]
+    RunIdentity --> Paths[rewrite mode-specific artifact paths]
+    RunIdentity --> ConfigSnapshot["write training config under run_configs or eval config under evaluations"]
+    RunIdentity --> RegistryMap[append outputs/run_registry.jsonl with repeat command and cwd]
 
     Paths --> Seed[setup_reproducibility]
     Seed --> Dirs[make_output_dirs]
@@ -147,12 +148,17 @@ flowchart TD
 ```mermaid
 flowchart TD
     Config[Resolved config] --> Hash[config hash: run.config_id]
-    Config --> RunID[run.id]
-    RunID --> ConfigFile["outputs/run_configs/<run_id>.yaml"]
+    Config --> RunID[stable run.id]
+    RunID --> Mode{run.mode}
     RunID --> Registry[outputs/run_registry.jsonl]
-    RunID --> RunDir["outputs/runs/<run_id>/"]
+
+    Mode -->|train| ConfigFile["outputs/run_configs/<run_id>.yaml"]
+    Mode -->|train| RunDir["outputs/runs/<run_id>/"]
+    Mode -->|eval| EvalDir["outputs/evaluations/<run_id>/"]
+    EvalDir --> EvalConfig[config.yaml]
 
     RunDir --> Logs[logs/]
+    EvalDir --> Logs
     Logs --> TrainLog[train.log]
     Logs --> Metrics[metrics.jsonl]
     Logs --> TB[tensorboard/ if enabled]
@@ -164,21 +170,26 @@ flowchart TD
     Checkpoints --> Manifest[manifest.json]
 
     RunDir --> Predictions[predictions/test_predictions.json]
+    EvalDir --> EvalPredictions[predictions/test_predictions.json]
     RunDir --> Profiles[profiles/]
+    EvalDir --> EvalProfiles[profiles/]
 
-    RunID --> WandB["W&B run name if enabled"]
+    RunID --> TrackingID["run.tracking_id"]
+    TrackingID --> WandB["W&B id and default name if enabled"]
     ConfigFile --> WandBArtifact["W&B config artifact if enabled"]
+    EvalConfig --> WandBArtifact
 ```
 
 Key behavior:
 
 - The framework disables Hydra timestamp output folders in `configs/config.yaml`.
 - `run.id` starts from a deterministic base id for the same effective config.
-- Fresh-run collisions are made unique with `_2`, `_3`, and later suffixes when the run folder or config snapshot already exists.
+- Fresh-run collisions reuse the stable id and emit a warning; intentional training resumes suppress that warning.
 - `run.config_id` stays stable for identical configs, so repeated runs remain traceable to the same effective setup.
 - Use `run.trial=2` or an explicit `run.id` when you want a different planned base id.
-- `checkpoint.resume=latest` keeps the base id so checkpoint lookup targets the existing run directory.
-- `outputs/run_registry.jsonl` is the lookup table from `run.id` to resolved config and artifact directory.
+- `checkpoint.resume=latest` keeps the base id so checkpoint lookup targets the existing training run directory.
+- Evaluation preserves that id while changing `run.run_dir` to `outputs/evaluations/<run.id>/`.
+- `outputs/run_registry.jsonl` records both training and evaluation configs, artifact directories, repeat commands, and command working directories.
 
 ## Registry And Component Flow
 
@@ -266,7 +277,7 @@ Edit or add:
 Expected path:
 
 ```text
-configs/task/<name>.yaml -> task.name -> TASK_REGISTRY -> task.step / task.predict_records -> Trainer/Evaluator
+configs/task/<name>.yaml -> task.name -> TASK_REGISTRY -> task.step / task.predict_records
 ```
 
 ### Add A New Loss Or Metric
@@ -350,7 +361,7 @@ When something breaks, follow this order:
 
 1. Check composed config: `uv run python scripts/run_sanity.py +experiment=sanity_cpu sanity.check_all_experiments=true`.
 2. Check the run id and config snapshot under `outputs/run_configs/<run_id>.yaml`.
-3. Check `outputs/run_registry.jsonl` for the config-to-run mapping.
+3. Check `outputs/run_registry.jsonl` for the config-to-run mapping, repeat command, and command working directory.
 4. Check local logs under `outputs/runs/<run_id>/logs/`.
 5. Check checkpoints under `outputs/runs/<run_id>/checkpoints/`.
 6. Run focused tests for the component you changed.

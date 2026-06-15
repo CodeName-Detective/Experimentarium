@@ -159,10 +159,11 @@ class WandBLogger:
 
             wandb_cfg = cfg_get(cfg, 'logging.wandb', cfg_get(cfg, 'wandb', {}))
             resolved_config = config_to_dict(cfg)
+            tracking_id = cfg_get(cfg, 'run.tracking_id', cfg_get(cfg, 'run.id', None))
             self.run = wandb.init(
                 project=cfg_get(wandb_cfg, 'project', 'ml-template'),
                 entity=cfg_get(wandb_cfg, 'entity', None),
-                id=str(cfg_get(cfg, 'run.id', None)) if cfg_get(cfg, 'run.id', None) is not None else None,
+                id=str(tracking_id) if tracking_id is not None else None,
                 name=cfg_get(wandb_cfg, 'run_name', cfg_get(cfg, 'run.id', None)),
                 tags=list(cfg_get(wandb_cfg, 'tags', []) or []),
                 notes=str(cfg_get(wandb_cfg, 'notes', '') or ''),
@@ -173,10 +174,11 @@ class WandBLogger:
             config_path = cfg_get(cfg, 'run.config_path', None)
             if config_path is not None and Path(str(config_path)).exists():
                 artifact = wandb.Artifact(
-                    name=f'{cfg_get(cfg, "run.id", "run")}-config',
+                    name=f'{tracking_id or "run"}-config',
                     type='config',
                     metadata={
                         'run_id': cfg_get(cfg, 'run.id', None),
+                        'tracking_id': tracking_id,
                         'config_id': cfg_get(cfg, 'run.config_id', None),
                     },
                 )

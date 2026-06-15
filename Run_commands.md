@@ -99,6 +99,8 @@ uv run python src/main.py +experiment=ablation_heads
 
 Each command composes a named experiment preset from `configs/experiment/` and trains that workload with its selected model, data, task, and checkpoint monitor.
 
+Experiment files are not invoked by the default config. `+experiment=<name>` explicitly composes the selected preset, whose group selections and values override the existing defaults.
+
 Console-script equivalents:
 
 ```bash
@@ -155,7 +157,7 @@ tiny full trainer run on the GPU.
 
 ## Evaluation
 
-Evaluation uses the same `src/main.py` entrypoint with `run.mode=eval`. Evaluation mode skips sanity checks and writes artifacts to `outputs/runs/<run_id>_evaluation/` when using a checkpoint path or selector for an existing training run.
+Evaluation uses the same `src/main.py` entrypoint with `run.mode=eval`. Evaluation mode skips sanity checks, keeps the source training run id, and writes artifacts to `outputs/evaluations/<run_id>/` when using a checkpoint path or selector.
 
 ### Evaluate A Specific Checkpoint
 
@@ -163,7 +165,7 @@ Evaluation uses the same `src/main.py` entrypoint with `run.mode=eval`. Evaluati
 uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
 ```
 
-Loads the specified checkpoint, evaluates the matching baseline config, and writes evaluation artifacts under `<run_id>_evaluation`.
+Loads the specified checkpoint, evaluates the matching baseline config, and writes evaluation artifacts under `outputs/evaluations/<run_id>/`.
 
 The composed model/data/task config must match the checkpoint. If the checkpoint
 was trained with `+experiment=baseline`, evaluate with `+experiment=baseline`.
@@ -197,7 +199,7 @@ Use `bash scripts/eval.sh ... +experiment=...` for experiment-specific eval.
 
 ### Evaluate By Checkpoint Selector
 
-Use a selector when the run identity resolves to the training run directory you want. If you used `run.id` or `run.trial` during training, use the same override during evaluation. The evaluation output still goes to `<run_id>_evaluation`.
+Use a selector when the run identity resolves to the training run directory you want. If you used `run.id` or `run.trial` during training, use the same override during evaluation. The evaluation output goes to `outputs/evaluations/<run_id>/`.
 
 ```bash
 uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=latest
@@ -206,7 +208,7 @@ uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=5
 uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=epoch_0005
 ```
 
-These evaluate the latest/last checkpoint, best checkpoint, or epoch-5 checkpoint from the resolved training run and write results to the `_evaluation` run directory.
+These evaluate the latest/last checkpoint, best checkpoint, or epoch-5 checkpoint from the resolved training run and write results to `outputs/evaluations/<run_id>/`.
 
 Example with a manual training run id:
 
@@ -214,7 +216,7 @@ Example with a manual training run id:
 uv run python src/main.py +experiment=baseline run.id=my_baseline run.mode=eval checkpoint.resume=best
 ```
 
-Evaluates the best checkpoint from the manually named training run `my_baseline` and writes artifacts to `my_baseline_evaluation`.
+Evaluates the best checkpoint from the manually named training run `my_baseline` and writes artifacts to `outputs/evaluations/my_baseline/`.
 
 ## Resume Training
 
@@ -319,7 +321,7 @@ CUDA fp32:
 uv run python src/main.py run.device=cuda run.precision=fp32
 ```
 
-Runs on the GPU while keeping full fp32 precision.
+Runs on the GPU while keeping the normal non-autocast fp32 path for training, validation, test evaluation, and prediction export.
 
 CUDA AMP:
 
@@ -327,7 +329,7 @@ CUDA AMP:
 uv run python src/main.py run.device=cuda run.precision=amp
 ```
 
-Runs on CUDA with automatic mixed precision for faster training and lower memory use.
+Runs on CUDA with automatic mixed precision for training, validation, test evaluation, and prediction export.
 
 BF16, if supported by your GPU:
 
@@ -335,7 +337,7 @@ BF16, if supported by your GPU:
 uv run python src/main.py run.device=cuda run.precision=bf16
 ```
 
-Uses bfloat16 autocast on compatible GPUs, usually with better numerical range than fp16.
+Uses bfloat16 autocast on compatible GPUs for training, validation, test evaluation, and prediction export, usually with better numerical range than fp16.
 
 ### Checkpoint Overrides
 
@@ -534,13 +536,13 @@ Generates `data/processed/train.pt`, `val.pt`, and `test.pt` for
 
 ### Profile Wrapper
 
-CPU profile:
+CPU profile using `configs/profiler.yaml`:
 
 ```bash
 bash scripts/profile.sh
 ```
 
-Runs the profiling wrapper in CPU mode and writes traces under `outputs/profiles/`.
+Runs the profiling wrapper with the default profiler config and writes traces under `outputs/profiles/`. Customize model, data, task, precision, step counts, and trace options in `configs/profiler.yaml`.
 
 CUDA profile:
 
@@ -548,9 +550,16 @@ CUDA profile:
 PROFILE_CUDA=1 bash scripts/profile.sh
 ```
 
-Runs the profiling wrapper with CUDA profiling enabled.
+Runs the profiling wrapper with CUDA profiling enabled. You can also set `profiler.cuda: true` and `run.device: cuda` in the profiler config.
 
-Traces are written under `outputs/profiles/`.
+Alternate profiler config:
+
+```bash
+PROFILE_CONFIG=configs/profiler.yaml bash scripts/profile.sh
+```
+
+Traces are written to `profiler.trace_dir`, which defaults to `outputs/profiles/`.
+See `profiler_tutorial.md` for when to profile, how to inspect the terminal table and TensorBoard trace, and how to turn profiler output into optimization steps.
 
 ### W&B Sweep Wrapper
 
@@ -565,13 +574,13 @@ This creates a W&B sweep from `configs/sweep.yaml` and starts a local agent.
 
 ## Makefile Workflows
 
-Install dev dependencies:
+Install base, optional-extra, and tracking dependencies:
 
 ```bash
 make install
 ```
 
-Installs the project dependencies needed for local development.
+Runs `uv sync`, `uv sync --all-extras`, and `uv sync --extra tracking` in sequence, matching the current Makefile target.
 
 Train:
 
@@ -645,7 +654,7 @@ Runs the baseline on a single CUDA process, which is the currently supported GPU
 
 ## Run Outputs
 
-Every run writes artifacts under a run-specific directory:
+Training writes artifacts under a run-specific directory:
 
 ```text
 outputs/runs/<run.id>/
@@ -662,14 +671,33 @@ outputs/runs/<run.id>/
   profiles/
 ```
 
-Resolved configs are stored in:
+Evaluation writes its config and artifacts separately:
+
+```text
+outputs/evaluations/<run.id>/
+  config.yaml
+  logs/
+    metrics.jsonl
+    tensorboard/
+  predictions/
+    test_predictions.json
+  profiles/
+```
+
+Training configs and the shared registry are stored in:
 
 ```text
 outputs/run_configs/<run.id>.yaml
 outputs/run_registry.jsonl
 ```
 
-Use those files to recover the exact command/config for a previous run.
+Use those files to recover the command and config for a previous run. Each JSONL record includes `command`, `command_cwd`, run identity fields, artifact paths, and the resolved config. Run the command from `command_cwd` to repeat the invocation. Sensitive CLI values are redacted in `command`; do not put secrets directly in config values because the resolved config is stored.
+
+Print the latest repeat command:
+
+```bash
+uv run python -c "import json; print(json.loads(open('outputs/run_registry.jsonl', encoding='utf-8').read().splitlines()[-1])['command'])"
+```
 
 ## Common Problems
 

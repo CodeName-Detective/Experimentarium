@@ -1,0 +1,75 @@
+# Profiler smoke-workload config loaded by scripts/profile.sh.
+# Edit this file when you want the profiler wrapper to use different model,
+# data, task, precision, or trace settings without editing the shell script.
+
+run:
+  # Seed used for model initialization and synthetic data generation.
+  seed: 42
+  # Requested device. Use cpu for the default smoke test, or cuda/cuda:0 for GPU profiling.
+  device: cpu
+  # Precision policy reused from training/evaluation: fp32, fp16, bf16, or amp.
+  precision: fp32
+  # Strict deterministic algorithms flag passed to setup_reproducibility.
+  deterministic: false
+
+model:
+  # Model registry key from src/models/model.py.
+  name: mlp
+  # Keep this aligned with data.input_dim for the toy classifier.
+  input_dim: ${data.input_dim}
+  hidden_dim: 32
+  num_layers: 1
+  # Keep this aligned with data.num_classes for classification.
+  num_classes: ${data.num_classes}
+  dropout: 0.0
+
+data:
+  # Dataset registry key from src/data/dataset.py.
+  name: toy_classification
+  seed: ${run.seed}
+  input_dim: 16
+  num_classes: 2
+  batch_size: 4
+  num_workers: 0
+  pin_memory: false
+  drop_last: false
+  splits:
+    train:
+      num_samples: 16
+    val:
+      num_samples: 8
+    test:
+      num_samples: 8
+
+task:
+  # Task registry key from src/tasks/task.py.
+  name: classification
+  output_key: logits
+  target_key: label
+  loss:
+    name: cross_entropy
+    label_smoothing: 0.0
+  metrics:
+    - accuracy
+
+profiler:
+  # Dataloader split to sample batches from.
+  split: train
+  # Directory written by torch.profiler.tensorboard_trace_handler.
+  trace_dir: outputs/profiles
+  # Set true here or run PROFILE_CUDA=1 bash scripts/profile.sh to profile CUDA activity.
+  cuda: false
+  # Run unrecorded steps first to avoid measuring one-time setup cost.
+  warmup_steps: 0
+  # Number of recorded task.step + backward iterations.
+  active_steps: 1
+  # Backward pass profiling is enabled by default to approximate a training step.
+  backward: true
+  # torch.profiler options.
+  record_shapes: true
+  profile_memory: false
+  with_stack: false
+  with_flops: false
+  # Printed summary table options.
+  sort_by: cpu_time_total
+  row_limit: 15

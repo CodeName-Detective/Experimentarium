@@ -23,7 +23,7 @@ wandb:
   project: ml-template
   # Optional W&B entity/team. Null uses the default account.
   entity: null
-  # Optional explicit W&B run name. Null means prepare_run uses the derived run.id.
+  # Optional explicit W&B run name. Null uses run.tracking_id, which distinguishes evaluation from training.
   run_name: null
   # Optional W&B tags for grouping and filtering runs.
   tags: []

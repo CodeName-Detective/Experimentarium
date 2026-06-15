@@ -171,9 +171,9 @@ Learn:
 - Fresh duplicate runs reuse the existing run directory and emit a warning.
 - Intentional training resumes reuse the existing run directory without the
   duplicate-run warning.
-- Eval from a training checkpoint writes to `<training_run_id>_evaluation`.
-- Resolved configs are stored in `outputs/run_configs/<run.id>.yaml`.
-- Run metadata is appended to `outputs/run_registry.jsonl`.
+- Eval from a training checkpoint keeps the training run id and writes to `outputs/evaluations/<run.id>/`.
+- Training configs are stored in `outputs/run_configs/<run.id>.yaml`; evaluation configs use `outputs/evaluations/<run.id>/config.yaml`.
+- Run metadata, a shell-safe repeat command, and its working directory are appended to `outputs/run_registry.jsonl`.
 - Checkpoint/log/prediction/profile paths are rewritten under `run.run_dir`.
 
 Try:
@@ -228,7 +228,7 @@ Learn:
 
 - Eval mode skips sanity checks.
 - Eval selector paths are resolved against the training run.
-- Eval artifacts are written to `outputs/runs/<run_id>_evaluation/`.
+- Eval artifacts and the resolved eval config are written to `outputs/evaluations/<run_id>/`.
 
 ## Behavior Exceptions To Remember
 
@@ -240,7 +240,7 @@ These are intentional deviations from the simple train/eval mental model:
 | Training resume with `checkpoint.resume=...` | Reuses the training run directory without the duplicate-run warning. | Resume is intentional and should continue the same run. |
 | Training resume | Skips sanity checks. | Resume should start quickly from a known run/config. |
 | Eval mode | Skips sanity checks. | Eval should only load and score a checkpoint. |
-| Eval from training checkpoint | Writes to `<run_id>_evaluation`. | Keeps evaluation artifacts separate from training artifacts. |
+| Eval from training checkpoint | Keeps `run.id` and writes to `outputs/evaluations/<run_id>/`. | Keeps evaluation artifacts separate from training artifacts. |
 | Resume with zero new epochs | Skips post-train test metrics and prediction export. | Avoids duplicate JSONL/TensorBoard/W&B points. |
 
 ## Phase 6: Registries
@@ -349,8 +349,8 @@ batch -> model(batch) -> {"logits": tensor} -> task.step(...)
 Read:
 
 1. `src/tasks/task.py`
-2. `configs/task/classification.yaml`
-3. `configs/task/regression.yaml`
+2. `src/tasks/segmentation.py`, `detection.py`, `ranking.py`, and `language_modeling.py`
+3. `configs/task/*.yaml`
 4. `src/losses/losses.py`
 5. `src/metrics/metrics.py`
 
@@ -367,6 +367,10 @@ Important classes:
 - `BaseTask`
 - `ClassificationTask`
 - `RegressionTask`
+- `SegmentationTask`
+- `DetectionTask`
+- `RankingTask`
+- `LanguageModelingTask`
 - `StepResult`
 - `MetricAccumulator`
 - `MetricCollection`
@@ -418,17 +422,21 @@ Read:
 1. `src/engine/trainer.py`
 2. `src/engine/evaluator.py`
 3. `src/callbacks/base.py`
-4. `configs/trainer/default.yaml`
+4. `callback_tutorial.md`
+5. `configs/trainer/default.yaml`
 
-Learn in `Trainer`:
+Learn:
 
 - Device placement.
 - AMP and precision handling.
+- `fp32` stays on the normal train/eval/predict path; `amp`, `fp16`, and `bf16` share CUDA autocast across trainer and evaluator paths.
 - Gradient accumulation.
 - Gradient clipping.
 - Finite-loss checks.
 - Training loop.
 - Validation loop.
+- Recursive device transfer for nested batches and evaluation without a task loss.
+- Callback hook timing, direct `Trainer` wiring, and current config-integration limitations.
 - Scheduler stepping.
 - Metric logging.
 - Checkpoint saving.
@@ -491,7 +499,7 @@ Learn:
 - JSONL logging is enabled by default.
 - TensorBoard logging is optional.
 - W&B logging is optional.
-- W&B uses framework `run.id` as the W&B run id.
+- W&B uses `run.tracking_id`: `run.id` for training and `<run.id>_evaluation` for evaluation.
 - W&B uses `resume='allow'`.
 - W&B receives the resolved config.
 - W&B logs the resolved config YAML as an artifact.

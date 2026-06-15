@@ -247,6 +247,58 @@ Fails or warns if the output location has less than the requested free space.
 Use this before long runs that will write checkpoints, predictions, TensorBoard
 logs, or W&B artifacts.
 
+## Profiling Usage
+
+Profiling is a separate diagnostic workflow and is not part of the
+`run_sanity_checks()` report. The profiling wrapper loads `configs/profiler.yaml`,
+runs the configured forward/backward workload, prints the most expensive
+operators by CPU time, and writes a TensorBoard-compatible trace.
+
+### Profile On CPU
+
+```bash
+bash scripts/profile.sh
+```
+
+CPU profiling is the default in `configs/profiler.yaml`. Customize the workload
+there when you want a different model, data config, task, precision, or number
+of recorded steps.
+
+### Enable CUDA Profiling
+
+```bash
+PROFILE_CUDA=1 bash scripts/profile.sh
+```
+
+This enables CUDA profiler activity in addition to CPU activity and moves the
+profiled model/batch to CUDA when available. You can also set
+`profiler.cuda: true` and `run.device: cuda` in `configs/profiler.yaml`. Run
+the GPU sanity check first if CUDA compatibility has not already been validated:
+
+```bash
+uv run python scripts/run_sanity.py +experiment=sanity_gpu
+```
+
+### Inspect Profiler Traces
+
+By default, profiler traces are written under:
+
+```text
+outputs/profiles/
+```
+
+Open them with TensorBoard:
+
+```bash
+uv run tensorboard --logdir outputs/profiles
+```
+
+For result interpretation and optimization workflow, see `profiler_tutorial.md`.
+
+Use the wrapper for a quick profiler/toolchain check. It does not profile the
+full `src/main.py` training loop. For alternate profiler settings, either edit
+`configs/profiler.yaml` or run `PROFILE_CONFIG=<path> bash scripts/profile.sh`.
+
 ## Run-Specific Overrides
 
 ### Validate A Different Experiment

@@ -108,6 +108,13 @@ outputs/
     checkpoints/manifest.json
     predictions/test_predictions.json
     profiles/
+  evaluations/<run.id>/
+    config.yaml
+    logs/train.log
+    logs/metrics.jsonl
+    logs/tensorboard/
+    predictions/test_predictions.json
+    profiles/
 ```
 
 Important behavior:
@@ -115,7 +122,7 @@ Important behavior:
 - The base id is derived from `run.name`, model/data/task names, `run.trial`, and `run.config_id`.
 - If a fresh run would reuse an existing id, it keeps that id and emits a warning instead of creating `<base>_2` or `<base>_3`; intentional training resumes do not emit the reuse warning.
 - Repeated identical configs keep the same `run.config_id` and append artifacts under the same `run.id`.
-- In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while writing eval artifacts to `outputs/runs/<run.id>_evaluation/`.
+- In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while preserving `run.id` and writing eval artifacts to `outputs/evaluations/<run.id>/`.
 
 Try it:
 
@@ -130,6 +137,9 @@ Inspect:
 ls outputs/run_configs
 ls outputs/runs
 cat outputs/run_registry.jsonl
+# Print the latest repeat command
+# Run it from the recorded command_cwd.
+uv run python -c "import json; print(json.loads(open('outputs/run_registry.jsonl', encoding='utf-8').read().splitlines()[-1])['command'])"
 ```
 
 Create planned repeats:
@@ -348,7 +358,7 @@ data/processed/val.pt
 data/processed/test.pt
 ```
 
-Customize paths in `configs/data/tensor_file.yaml` or from CLI:
+`TensorFileDataset` reads `data.splits.train.path`, `data.splits.val.path`, and `data.splits.test.path`. Relative paths resolve from the repository working directory. Customize them in `configs/data/tensor_file.yaml` or from the CLI:
 
 ```bash
 uv run python src/main.py data=tensor_file data.splits.train.path=/path/train.pt data.splits.val.path=/path/val.pt data.splits.test.path=/path/test.pt
@@ -418,7 +428,20 @@ uv run python scripts/run_sanity.py model=my_mlp
 
 ## Tutorial 10: Add A New Task
 
-Add a task when your workload changes loss semantics, target keys, model-output interpretation, or prediction formatting. Examples: segmentation, ranking, language modeling, multi-task learning, contrastive learning.
+Add a task when your workload changes loss semantics, target keys, model-output interpretation, or prediction formatting. Built-ins already cover segmentation, detection, pointwise ranking, and autoregressive language modeling. Add another task for semantics such as multi-task or contrastive learning.
+
+The built-in modules are `src/tasks/segmentation.py`, `detection.py`, `ranking.py`, and `language_modeling.py`. They still require compatible models and datasets. Detection models must accept the framework batch dictionary and return model losses and/or a `detections` collection; variable-size detection datasets can expose `collate_fn` for `build_dataloaders` to use.
+
+Built-in task contracts:
+
+| Task config | Batch target | Model output | Built-in behavior |
+| --- | --- | --- | --- |
+| `task=segmentation` | `mask` with shape `[B, ...]` | `logits` with shape `[B, C, ...]` | Cross-entropy, ignore-index filtering, pixel accuracy, and mask export |
+| `task=detection` | `targets`, usually one mapping per image | `loss`, `losses`, or `loss_*` values for training; `detections` for prediction | Loss aggregation, score filtering, NMS, and JSON-safe export |
+| `task=ranking` | `relevance` with the same shape as scores | `scores` | Pointwise MSE/MAE and descending ranking export |
+| `task=language_modeling` | `labels` with shape `[B, T]` | `logits` with shape `[B, T, V]` | Token cross-entropy, ignore-index filtering, token accuracy, perplexity, and token export |
+
+Selecting a task config changes task semantics only. Provide a model and dataset whose output and batch keys satisfy the selected contract; the four new task configs do not automatically select matching models or datasets.
 
 Edit `src/tasks/task.py` or add a module under `src/tasks/` and import it from `src/tasks/__init__.py`.
 
@@ -683,7 +706,7 @@ uv run python src/main.py trainer.detect_anomaly=true trainer.check_finite_loss=
 
 Notes:
 
-- AMP is active only on CUDA when `run.precision` is `fp16`, `bf16`, or `amp`.
+- `run.precision=fp32` uses the normal non-autocast path for train, validation, test, and prediction. `fp16`, `bf16`, and `amp` use CUDA autocast across both trainer and evaluator paths.
 - `detect_anomaly=true` is useful for debugging but slows training.
 - `check_finite_loss=true` fails fast on NaN or Inf losses.
 
@@ -780,7 +803,7 @@ logging:
 
 Behavior:
 
-- If `logging.wandb.run_name` is null, the framework uses the final `run.id`.
+- If `logging.wandb.run_name` is null, the framework uses `run.tracking_id`: `run.id` for training and `<run.id>_evaluation` for evaluation.
 - W&B receives the fully resolved config through `wandb.init(config=...)`.
 - The resolved config snapshot is also logged as a W&B artifact.
 - Logging is rank-zero only to avoid duplicate DDP logs.
@@ -802,7 +825,7 @@ bash scripts/eval.sh outputs/runs/<run.id>/checkpoints/best.pt
 Prediction output:
 
 ```text
-outputs/runs/<run.id>/predictions/test_predictions.json
+outputs/evaluations/<run.id>/predictions/test_predictions.json
 ```
 
 Limit prediction records:
@@ -860,11 +883,13 @@ Customize `configs/sanity/default.yaml` when your project needs additional requi
 
 ## Tutorial 20: Profile A Tiny Workload
 
-Run CPU profiler:
+Run CPU profiler with the default profiler config:
 
 ```bash
 bash scripts/profile.sh
 ```
+
+The workload is defined in `configs/profiler.yaml`. Edit that file to change model, data, task, precision, warmup steps, recorded steps, or trace options.
 
 Run CUDA profiler:
 
@@ -872,7 +897,13 @@ Run CUDA profiler:
 PROFILE_CUDA=1 bash scripts/profile.sh
 ```
 
-Outputs are written under:
+Run an alternate profiler config:
+
+```bash
+PROFILE_CONFIG=configs/profiler.yaml bash scripts/profile.sh
+```
+
+Outputs are written under `profiler.trace_dir`, which defaults to:
 
 ```text
 outputs/profiles/
@@ -884,7 +915,7 @@ Open with TensorBoard:
 uv run tensorboard --logdir outputs/profiles
 ```
 
-Use this when a model or dataloader change becomes slow and you need operator-level traces.
+Use this when a model or dataloader change becomes slow and you need operator-level traces. See `profiler_tutorial.md` for how to interpret the table, inspect TensorBoard traces, and decide what to optimize.
 
 ## Tutorial 21: Run A W&B Sweep
 
@@ -915,21 +946,18 @@ Make sure the swept metric exists in logs. For example, if the sweep metric is `
 
 Use callbacks when you need lifecycle behavior without editing the trainer: extra logging, EMA, visualization, custom artifacts, profiler ranges, or diagnostics.
 
-Create a callback class:
+Create a callback class. See `callback_tutorial.md` for the complete hook reference, wiring options, and additional examples:
 
 ```python
 from src.callbacks import Callback
 from src.utils.registry import register_callback
 
 
-@register_callback('grad_norm_logger')
-class GradNormLogger(Callback):
+@register_callback('learning_rate_logger')
+class LearningRateLogger(Callback):
     def on_batch_end(self, trainer, batch_idx: int, metrics: dict[str, float]) -> None:
-        total = 0.0
-        for param in trainer.model.parameters():
-            if param.grad is not None:
-                total += float(param.grad.detach().norm().cpu())
-        trainer.loggers.log_metrics({'debug/grad_norm': total}, step=trainer.global_step)
+        learning_rate = float(trainer.optimizer.param_groups[0]['lr'])
+        trainer.loggers.log_metrics({'train/lr': learning_rate}, step=trainer.global_step)
 ```
 
 Current trainer accepts callbacks through its constructor, but `src/main.py` does not yet build callbacks from config. To make callbacks configurable, add a callback config group and build registered callbacks in `src/main.py` before constructing `Trainer`.
@@ -1151,7 +1179,7 @@ Shape error:
 Resume does not find checkpoint:
 
 - Use the same config base id when running `checkpoint.resume=latest`.
-- Check `outputs/run_registry.jsonl` for the run id and run directory.
+- Check `outputs/run_registry.jsonl` for the run id, run directory, repeat command, and command working directory.
 - Use an explicit checkpoint path if the config changed.
 
 W&B not logging:

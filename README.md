@@ -2,7 +2,7 @@
 
 A research-grade PyTorch experiment framework intended to be copied into a new ML project and extended. It is built around Hydra configs, registries, task-specific loss and metric logic, fault-tolerant checkpoints, sanity checks for new machines, and CPU-friendly tests.
 
-Use `README.md` for day-to-day usage, `Run_commands.md` for train/eval command references, `sanity_check_commands.md` for sanity-check command references, `tutorial.md` for hands-on customization tutorials, `Description.md` for a folder-by-folder reference, and `Flowchart.md` for entrypoint-to-artifact flow diagrams.
+Use `README.md` for day-to-day usage, `Run_commands.md` for train/eval command references, `sanity_check_commands.md` for sanity-check command references, `callback_tutorial.md` for callback hooks and examples, `profiler_tutorial.md` for profiler usage and result interpretation, `tutorial.md` for hands-on customization tutorials, `Description.md` for a folder-by-folder reference, and `Flowchart.md` for entrypoint-to-artifact flow diagrams.
 
 ## What This Template Provides
 
@@ -67,9 +67,8 @@ For GPU machines, install the PyTorch wheel that matches the NVIDIA driver and G
 ```bash
 uv init --python 3.10
 ```
+
 [UV PyTorch Installation Guide](https://docs.astral.sh/uv/guides/integration/pytorch/#installing-pytorch)
-
-
 
 After installation, verify compatibility before training:
 
@@ -115,7 +114,6 @@ make lint
 make train ARGS="+experiment=baseline trainer.max_epochs=10"
 ```
 
-
 ## Run Identity And Output Organization
 
 Every entrypoint calls `src.utils.run.prepare_run` before building loggers or checkpoints. It computes a deterministic `run.config_id` hash from the effective config and derives a readable base run id from `run.name`, `model.name`, `data.name`, `task.name`, `run.trial`, and the hash.
@@ -126,7 +124,7 @@ Default artifact layout:
 outputs/
   run_configs/
     <run.id>.yaml              # resolved config snapshot for the run
-  run_registry.jsonl           # mapping from run.id to config_id, run_dir, config_path, and config
+  run_registry.jsonl           # run id, paths, repeat command, working directory, and resolved config
   runs/
     <run.id>/
       logs/
@@ -141,9 +139,19 @@ outputs/
       predictions/
         test_predictions.json
       profiles/
+  evaluations/
+    <run.id>/
+      config.yaml
+      logs/
+        train.log
+        metrics.jsonl
+        tensorboard/
+      predictions/
+        test_predictions.json
+      profiles/
 ```
 
-Runs reuse the same run folder when the derived or manual id already exists. Fresh duplicate runs emit a capital warning and append new logs, metrics, predictions, and tracking events under the existing `outputs/runs/<run.id>/` directory. Intentional training resumes with `checkpoint.resume=...` do not emit that reuse warning; the trainer logs the resume epoch after loading the checkpoint. Evaluation with `run.mode=eval` and an explicit checkpoint path under `outputs/runs/<run.id>/checkpoints/` writes results to `outputs/runs/<run.id>_evaluation/`.
+Runs reuse the same run folder when the derived or manual id already exists. Fresh duplicate runs emit a capital warning and append new logs, metrics, predictions, and tracking events under the existing `outputs/runs/<run.id>/` directory. Intentional training resumes with `checkpoint.resume=...` do not emit that reuse warning; the trainer logs the resume epoch after loading the checkpoint. Evaluation keeps the source training `run.id`, loads checkpoints from `outputs/runs/<run.id>/checkpoints/`, and writes results plus its resolved config to `outputs/evaluations/<run.id>/`.
 
 To create a planned repeat with a different base id, change a config value that is part of the run identity or provide a manual id:
 
@@ -152,7 +160,9 @@ uv run python src/main.py +experiment=baseline run.trial=2
 uv run python src/main.py +experiment=baseline run.id=my_manual_run_id
 ```
 
-W&B receives the resolved config through `wandb.init(config=...)`, uses the final `run.id` as the W&B id, uses it as the run name when `logging.wandb.run_name` is null, and logs the resolved config YAML as a W&B artifact. In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while writing evaluation artifacts with `run.id=<run.id>_evaluation`.
+W&B receives the resolved config through `wandb.init(config=...)`, uses `run.tracking_id` as the W&B id and default name, and logs the resolved config YAML as a W&B artifact. Training uses `run.tracking_id=<run.id>`; evaluation keeps `run.id=<run.id>` for the filesystem while using `run.tracking_id=<run.id>_evaluation` to avoid merging tracking records.
+
+Each `outputs/run_registry.jsonl` record includes a shell-safe `command` and `command_cwd`. Run that command from the recorded directory to repeat the same invocation. Sensitive CLI argument values are redacted in `command`, but avoid putting secrets in config values because the resolved config is also stored for reproducibility.
 
 ## Use This As A New Project Template
 
@@ -163,7 +173,7 @@ W&B receives the resolved config through `wandb.init(config=...)`, uses the fina
 5. Run `uv run python scripts/run_sanity.py +experiment=sanity_cpu` before changing anything substantial.
 6. Add your real dataset under `src/data/` and a matching config under `configs/data/`.
 7. Add or adapt a model under `src/models/` and a matching config under `configs/model/`.
-8. Add a task under `src/tasks/` if your workload is not standard classification or regression.
+8. Add a task under `src/tasks/` if your workload differs from the built-in classification, regression, segmentation, detection, ranking, or language-modeling behavior.
 9. Create an experiment file under `configs/experiment/` that selects the model, data, task, optimizer, scheduler, and overrides.
 10. Add focused tests under `tests/`, then run the validation checklist below.
 
@@ -222,9 +232,10 @@ uv run python src/main.py checkpoint.resume=latest
 bash scripts/preprocess.sh --force
 uv run python src/main.py data=tensor_file scheduler=none
 
-# Profile a tiny workload
+# Profile a tiny workload using configs/profiler.yaml
 bash scripts/profile.sh
 PROFILE_CUDA=1 bash scripts/profile.sh
+PROFILE_CONFIG=configs/profiler.yaml bash scripts/profile.sh
 
 # Launch a W&B sweep after installing tracking extras
 uv sync --extra tracking          # if keeping pyproject.toml
@@ -257,6 +268,10 @@ uv run python src/main.py model=small_transformer data=toy_sequence task=classif
 uv run python src/main.py scheduler=onecycle scheduler.max_lr=3e-3 scheduler.interval=step
 uv run python src/main.py run.device=cuda run.precision=amp data.batch_size=128
 ```
+
+Experiment presets are opt-in: files under `configs/experiment/` are not composed by default and only apply when selected with `+experiment=<name>`. Their values override the root defaults and selected config-group settings.
+
+Profiler defaults live in `configs/profiler.yaml` and are loaded by `bash scripts/profile.sh`; use `PROFILE_CONFIG=<path>` for an alternate profiler config.
 
 Use experiment files for repeatable research runs:
 
@@ -306,7 +321,9 @@ class MyDataset(Dataset):
 
 Then add `configs/data/my_dataset.yaml`. `src/data/dataloader.py` will build train, val, and test loaders from the registry.
 
-Add a task when the model output, target format, loss, metrics, or prediction records differ from existing classification/regression behavior. Subclass `BaseTask`, register it with `@register_task('my_task')`, and reference it from `configs/task/my_task.yaml`.
+File-backed paths belong in the data config. The built-in `tensor_file` dataset reads `data.splits.train.path`, `data.splits.val.path`, and `data.splits.test.path`; relative paths resolve from the repository working directory. A custom key such as `data.root` only has an effect when the registered dataset class reads it.
+
+Add a task when the model output, target format, loss, metrics, or prediction records differ from the built-in classification, regression, segmentation, detection, ranking, or language-modeling behavior. Subclass `BaseTask`, register it with `@register_task('my_task')`, and reference it from `configs/task/my_task.yaml`.
 
 Add losses and metrics with `@register_loss('name')` and `@register_metric('name')`, then reference them from task YAML. Add schedulers with `@register_scheduler('name')` and a matching config under `configs/scheduler/`.
 
@@ -373,6 +390,8 @@ uv run python src/main.py run.precision=fp32
 uv run python src/main.py run.precision=amp
 uv run python src/main.py run.precision=bf16
 ```
+
+`run.precision=fp32` uses the normal non-autocast path for training, validation, test evaluation, and prediction export. `amp`, `fp16`, and `bf16` use the same CUDA autocast policy across training and evaluator/prediction paths.
 
 `src/runtime/distributed.py` handles rank helpers, small-object broadcast, and distributed metric reduction. The trainer initializes distributed runtime from the `torchrun` environment when present.
 

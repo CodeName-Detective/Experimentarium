@@ -1,0 +1,18 @@
+# Autoregressive language-modeling task config.
+# Implemented by src/tasks/language_modeling.py.
+
+# Task registry key.
+name: language_modeling
+# Key in the model output dict containing token logits.
+output_key: logits
+# Key in the batch dict containing next-token labels.
+target_key: labels
+# Label value excluded from token loss and token accuracy.
+ignore_index: -100
+# Token-level cross-entropy objective.
+loss:
+  name: cross_entropy
+  label_smoothing: 0.0
+# Token accuracy is configured here; perplexity is reported by the task.
+metrics:
+  - accuracy

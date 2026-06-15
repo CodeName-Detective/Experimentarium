@@ -1,4 +1,7 @@
 import copy
+import json
+import shlex
+import sys
 from pathlib import Path
 
 from src.utils.run import prepare_run
@@ -81,12 +84,14 @@ def test_prepare_run_reuses_explicit_id_collisions(tmp_path, tiny_cfg):
     assert next_cfg['run']['run_dir'] == str(Path(tmp_path, 'runs', 'manual-run'))
 
 
-def test_prepare_run_eval_uses_checkpoint_run_dir_with_evaluation_suffix(tmp_path, tiny_cfg):
+def test_prepare_run_eval_uses_training_id_under_evaluations_dir(tmp_path, tiny_cfg):
     training_run_id = 'trained-run'
-    eval_run_id = f'{training_run_id}_evaluation'
     checkpoint = Path(tmp_path, 'runs', training_run_id, 'checkpoints', 'best.pt')
     checkpoint.parent.mkdir(parents=True)
     checkpoint.write_bytes(b'placeholder')
+    training_config = Path(tmp_path, 'run_configs', f'{training_run_id}.yaml')
+    training_config.parent.mkdir(parents=True)
+    training_config.write_text('training: config\n', encoding='utf-8')
 
     cfg = copy.deepcopy(tiny_cfg)
     cfg['run']['output_dir'] = str(tmp_path)
@@ -95,10 +100,16 @@ def test_prepare_run_eval_uses_checkpoint_run_dir_with_evaluation_suffix(tmp_pat
 
     info = prepare_run(cfg)
 
-    assert info.run_id == eval_run_id
-    assert info.run_dir == str(Path(tmp_path, 'runs', eval_run_id))
-    assert cfg['checkpoint']['dir'] == str(Path(tmp_path, 'runs', eval_run_id, 'checkpoints'))
-    assert cfg['run']['prediction_dir'] == str(Path(tmp_path, 'runs', eval_run_id, 'predictions'))
+    evaluation_dir = Path(tmp_path, 'evaluations', training_run_id)
+    assert info.run_id == training_run_id
+    assert info.run_dir == str(evaluation_dir)
+    assert info.config_path == str(evaluation_dir / 'config.yaml')
+    assert cfg['run']['evaluations_dir'] == str(Path(tmp_path, 'evaluations'))
+    assert cfg['run']['tracking_id'] == f'{training_run_id}_evaluation'
+    assert cfg['logging']['wandb']['run_name'] == f'{training_run_id}_evaluation'
+    assert cfg['checkpoint']['dir'] == str(evaluation_dir / 'checkpoints')
+    assert cfg['run']['prediction_dir'] == str(evaluation_dir / 'predictions')
+    assert training_config.read_text(encoding='utf-8') == 'training: config\n'
     assert info.reused_existing is False
 
     repeat_cfg = copy.deepcopy(tiny_cfg)
@@ -107,7 +118,8 @@ def test_prepare_run_eval_uses_checkpoint_run_dir_with_evaluation_suffix(tmp_pat
     repeat_cfg['checkpoint']['resume'] = str(checkpoint)
     repeat_info = prepare_run(repeat_cfg)
 
-    assert repeat_info.run_id == eval_run_id
+    assert repeat_info.run_id == training_run_id
+    assert repeat_info.run_dir == str(evaluation_dir)
     assert repeat_info.reused_existing is True
     assert repeat_info.warning is not None
 
@@ -140,9 +152,45 @@ def test_prepare_run_eval_checkpoint_selectors_use_evaluation_run_dir(tmp_path, 
 
         eval_info = prepare_run(eval_cfg)
 
-        assert eval_info.run_id == f'{train_info.run_id}_evaluation'
-        assert eval_info.run_dir == str(Path(tmp_path, 'runs', f'{train_info.run_id}_evaluation'))
+        assert eval_info.run_id == train_info.run_id
+        assert eval_info.run_dir == str(Path(tmp_path, 'evaluations', train_info.run_id))
         assert eval_cfg['checkpoint']['resume'] == str(Path(checkpoint_dir, expected_name))
-        assert eval_cfg['checkpoint']['dir'] == str(
-            Path(tmp_path, 'runs', f'{train_info.run_id}_evaluation', 'checkpoints')
-        )
+        assert eval_cfg['checkpoint']['dir'] == str(Path(tmp_path, 'evaluations', train_info.run_id, 'checkpoints'))
+
+
+def test_prepare_run_eval_without_checkpoint_uses_evaluations_dir(tmp_path, tiny_cfg):
+    cfg = copy.deepcopy(tiny_cfg)
+    cfg['run']['id'] = 'manual-eval'
+    cfg['run']['output_dir'] = str(tmp_path)
+    cfg['run']['mode'] = 'eval'
+
+    info = prepare_run(cfg)
+
+    assert info.run_id == 'manual-eval'
+    assert info.run_dir == str(Path(tmp_path, 'evaluations', 'manual-eval'))
+    assert info.config_path == str(Path(info.run_dir, 'config.yaml'))
+
+
+def test_prepare_run_registry_records_reproducible_redacted_command(tmp_path, tiny_cfg, monkeypatch):
+    argv = [
+        '/workspace/.venv/bin/python',
+        'src/main.py',
+        '+experiment=baseline',
+        'optimizer.lr=3e-4',
+        '--api-key',
+        'do-not-store',
+        'logging.secret=also-do-not-store',
+    ]
+    monkeypatch.setattr(sys, 'orig_argv', argv)
+    cfg = copy.deepcopy(tiny_cfg)
+    cfg['run']['output_dir'] = str(tmp_path)
+
+    info = prepare_run(cfg)
+
+    record = json.loads(Path(info.config_registry).read_text(encoding='utf-8').splitlines()[-1])
+    assert shlex.split(record['command']) == [
+        *argv[:5],
+        '<redacted>',
+        'logging.secret=<redacted>',
+    ]
+    assert record['command_cwd'] == str(Path.cwd())

@@ -1,0 +1,19 @@
+# Semantic segmentation task config.
+# Implemented by src/tasks/segmentation.py.
+
+# Task registry key.
+name: segmentation
+# Key in the model output dict containing per-pixel class logits.
+output_key: logits
+# Key in the batch dict containing integer segmentation masks.
+target_key: mask
+# Class index excluded from per-pixel loss and metrics.
+ignore_index: 255
+# Loss configuration passed to the segmentation task.
+loss:
+  # Cross-entropy is suitable for multi-class semantic segmentation.
+  name: cross_entropy
+  label_smoothing: 0.0
+# Pixel accuracy uses the built-in accuracy metric after flattening valid pixels.
+metrics:
+  - accuracy

@@ -16,6 +16,8 @@ import copy
 import hashlib
 import json
 import re
+import shlex
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -35,9 +37,11 @@ _HASH_EXCLUDED_PATHS = (
     ('run', 'config_id'),
     ('run', 'run_dir'),
     ('run', 'runs_dir'),
+    ('run', 'evaluations_dir'),
     ('run', 'config_dir'),
     ('run', 'config_path'),
     ('run', 'config_registry'),
+    ('run', 'tracking_id'),
     ('run', 'log_dir'),
     ('run', 'prediction_dir'),
     ('run', 'profile_dir'),
@@ -48,6 +52,12 @@ _HASH_EXCLUDED_PATHS = (
     ('logging', 'jsonl', 'path'),
     ('logging', 'tensorboard', 'log_dir'),
     ('logging', 'wandb', 'run_name'),
+)
+
+
+_SENSITIVE_ARGUMENT_PATTERN = re.compile(
+    r'(?:^|[._-])(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)(?:$|[._-])',
+    re.IGNORECASE,
 )
 
 
@@ -70,8 +80,8 @@ def prepare_run(cfg: Any) -> RunInfo:
     The base id is deterministic for the same effective experiment config.
     Reusing an existing id writes artifacts to the same run directory and emits
     a warning instead of selecting ``run_2``, ``run_3``, and so on. Evaluation
-    from a checkpoint under ``runs/<run_id>/checkpoints`` writes to
-    ``runs/<run_id>_evaluation`` so evaluation artifacts are grouped separately.
+    from a checkpoint under ``runs/<run_id>/checkpoints`` keeps the training run
+    id and writes artifacts to ``evaluations/<run_id>``.
 
     Returns:
         Resolved run identity and artifact paths.
@@ -80,29 +90,35 @@ def prepare_run(cfg: Any) -> RunInfo:
     config_id = _config_hash(raw_config)
     output_dir = Path(str(cfg_get(cfg, 'run.output_dir', 'outputs')))
     runs_dir = Path(str(cfg_get(cfg, 'run.runs_dir', output_dir / 'runs')))
+    evaluations_dir = Path(str(cfg_get(cfg, 'run.evaluations_dir', output_dir / 'evaluations')))
     config_dir = Path(str(cfg_get(cfg, 'run.config_dir', output_dir / 'run_configs')))
     registry_path = Path(str(cfg_get(cfg, 'run.config_registry', output_dir / 'run_registry.jsonl')))
     explicit_id = cfg_get(cfg, 'run.id', None)
     derived_run_id = _derived_run_id(cfg, config_id)
-    eval_run_id = _prepare_eval_resume(cfg, runs_dir, explicit_id, derived_run_id)
-    if eval_run_id:
-        base_run_id = eval_run_id
+    is_evaluation = _is_evaluation(cfg)
+    evaluation_run_id = _prepare_eval_resume(cfg, runs_dir, explicit_id, derived_run_id)
+    if evaluation_run_id:
+        base_run_id = evaluation_run_id
     elif explicit_id:
         base_run_id = _slug(str(explicit_id)) or 'run'
     else:
         base_run_id = derived_run_id
 
-    run_id, reused_existing = _select_run_id(base_run_id, runs_dir, config_dir)
-    run_dir = runs_dir / run_id
-    config_path = config_dir / f'{run_id}.yaml'
+    artifact_root = evaluations_dir if is_evaluation else runs_dir
+    run_dir = artifact_root / base_run_id
+    config_path = run_dir / 'config.yaml' if is_evaluation else config_dir / f'{base_run_id}.yaml'
+    run_id, reused_existing = _select_run_id(base_run_id, run_dir, config_path)
+    tracking_id = f'{run_id}_evaluation' if is_evaluation else run_id
     warning = _reuse_warning(run_id, run_dir, config_path) if reused_existing and not _is_training_resume(cfg) else None
 
     _cfg_set(cfg, 'run.id', run_id)
     _cfg_set(cfg, 'run.config_id', config_id)
     _cfg_set(cfg, 'run.runs_dir', str(runs_dir))
+    _cfg_set(cfg, 'run.evaluations_dir', str(evaluations_dir))
     _cfg_set(cfg, 'run.config_dir', str(config_dir))
     _cfg_set(cfg, 'run.config_path', str(config_path))
     _cfg_set(cfg, 'run.config_registry', str(registry_path))
+    _cfg_set(cfg, 'run.tracking_id', tracking_id)
     _cfg_set(cfg, 'run.run_dir', str(run_dir))
     _cfg_set(cfg, 'run.log_dir', str(run_dir / 'logs'))
     _cfg_set(cfg, 'run.prediction_dir', str(run_dir / 'predictions'))
@@ -111,7 +127,7 @@ def prepare_run(cfg: Any) -> RunInfo:
     _cfg_set(cfg, 'logging.jsonl.path', str(run_dir / 'logs' / 'metrics.jsonl'))
     _cfg_set(cfg, 'logging.tensorboard.log_dir', str(run_dir / 'logs' / 'tensorboard'))
     if not cfg_get(cfg, 'logging.wandb.run_name', None):
-        _cfg_set(cfg, 'logging.wandb.run_name', run_id)
+        _cfg_set(cfg, 'logging.wandb.run_name', tracking_id)
 
     info = RunInfo(
         run_id=run_id,
@@ -141,9 +157,9 @@ def _derived_run_id(cfg: Any, config_id: str) -> str:
     return f'{stem}-{config_id}'
 
 
-def _select_run_id(base_run_id: str, runs_dir: Path, config_dir: Path) -> tuple[str, bool]:
+def _select_run_id(base_run_id: str, run_dir: Path, config_path: Path) -> tuple[str, bool]:
     if is_rank0():
-        run_id, reused_existing = _resolve_run_id(base_run_id, runs_dir, config_dir)
+        run_id, reused_existing = _resolve_run_id(base_run_id, run_dir, config_path)
     else:
         run_id = base_run_id
         reused_existing = False
@@ -151,12 +167,14 @@ def _select_run_id(base_run_id: str, runs_dir: Path, config_dir: Path) -> tuple[
     return str(payload[0]), bool(payload[1])
 
 
-def _resolve_run_id(base_run_id: str, runs_dir: Path, config_dir: Path) -> tuple[str, bool]:
-    run_dir = runs_dir / base_run_id
-    config_path = config_dir / f'{base_run_id}.yaml'
+def _resolve_run_id(base_run_id: str, run_dir: Path, config_path: Path) -> tuple[str, bool]:
     reused_existing = run_dir.exists() or config_path.exists()
     run_dir.mkdir(parents=True, exist_ok=True)
     return base_run_id, reused_existing
+
+
+def _is_evaluation(cfg: Any) -> bool:
+    return str(cfg_get(cfg, 'run.mode', 'train')).lower() == 'eval'
 
 
 def _is_training_resume(cfg: Any) -> bool:
@@ -164,23 +182,19 @@ def _is_training_resume(cfg: Any) -> bool:
 
 
 def _prepare_eval_resume(cfg: Any, runs_dir: Path, explicit_id: Any, derived_run_id: str) -> str | None:
-    if str(cfg_get(cfg, 'run.mode', 'train')).lower() != 'eval':
+    if not _is_evaluation(cfg):
         return None
 
     resume = str(cfg_get(cfg, 'checkpoint.resume', '') or '').strip()
-    if not resume:
-        return None
+    training_run_id = _slug(str(explicit_id)) if explicit_id else derived_run_id
+    if resume:
+        checkpoint_path = Path(resume).expanduser()
+        training_run_id = _training_run_id_from_checkpoint_path(checkpoint_path, runs_dir) or training_run_id
+        selected_path = _resolve_eval_checkpoint_selector(resume, runs_dir / training_run_id)
+        if selected_path is not None:
+            _cfg_set(cfg, 'checkpoint.resume', str(selected_path))
 
-    checkpoint_path = Path(resume).expanduser()
-    training_run_id = _training_run_id_from_checkpoint_path(checkpoint_path, runs_dir)
-    if training_run_id is None:
-        training_run_id = _slug(str(explicit_id)) if explicit_id else derived_run_id
-
-    selected_path = _resolve_eval_checkpoint_selector(resume, runs_dir / training_run_id)
-    if selected_path is not None:
-        _cfg_set(cfg, 'checkpoint.resume', str(selected_path))
-
-    return f'{training_run_id}_evaluation' if training_run_id else None
+    return training_run_id or None
 
 
 def _training_run_id_from_checkpoint_path(checkpoint_path: Path, runs_dir: Path) -> str | None:
@@ -281,9 +295,38 @@ def _persist_run_mapping(cfg: Any, info: RunInfo) -> None:
     registry_path.parent.mkdir(parents=True, exist_ok=True)
     Path(info.run_dir).mkdir(parents=True, exist_ok=True)
     _write_config_yaml(config_path, config)
-    record = {**asdict(info), 'config': config}
+    record = {
+        **asdict(info),
+        'command': _invocation_command(),
+        'command_cwd': str(Path.cwd()),
+        'config': config,
+    }
     with registry_path.open('a', encoding='utf-8') as handle:
         handle.write(json.dumps(record, sort_keys=True, default=str) + '\n')
+
+
+def _invocation_command() -> str:
+    argv = list(getattr(sys, 'orig_argv', ()) or ())
+    if not argv:
+        argv = [sys.executable, *sys.argv]
+    return shlex.join(_redact_sensitive_arguments(argv))
+
+
+def _redact_sensitive_arguments(argv: list[str]) -> list[str]:
+    redacted: list[str] = []
+    redact_next = False
+    for argument in argv:
+        if redact_next:
+            redacted.append('<redacted>')
+            redact_next = False
+            continue
+        if '=' in argument:
+            key, _ = argument.split('=', maxsplit=1)
+            redacted.append(f'{key}=<redacted>' if _SENSITIVE_ARGUMENT_PATTERN.search(key) else argument)
+            continue
+        redacted.append(argument)
+        redact_next = bool(_SENSITIVE_ARGUMENT_PATTERN.search(argument))
+    return redacted
 
 
 def _write_config_yaml(path: Path, config: dict[str, Any]) -> None:

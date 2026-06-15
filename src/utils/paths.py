@@ -34,6 +34,7 @@ def make_output_dirs(cfg: ConfigType | None = None) -> None:
     for key, default in (
         ('run.output_dir', OUTPUT_DIR),
         ('run.run_dir', cfg_get(cfg, 'run.run_dir', OUTPUT_DIR)),
+        ('run.evaluations_dir', cfg_get(cfg, 'run.evaluations_dir', OUTPUT_DIR / 'evaluations')),
         ('run.config_dir', cfg_get(cfg, 'run.config_dir', OUTPUT_DIR / 'run_configs')),
         ('checkpoint.dir', CHECKPOINT_DIR),
         ('run.log_dir', LOG_DIR),

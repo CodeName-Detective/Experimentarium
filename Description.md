@@ -9,11 +9,13 @@ For command-oriented usage, start with `README.md`.
 - `README.md`: Day-to-day usage guide. Use it when you want to install, sanity-check, train, evaluate, resume, extend, or validate the template.
 - `Run_commands.md`: Command cookbook for training, evaluation, resume, config overrides, shell wrappers, Makefile targets, profiling, preprocessing, and W&B sweeps.
 - `sanity_check_commands.md`: Command cookbook for machine/environment sanity checks, CUDA diagnostics, PyTorch install recommendations, and smoke-test controls.
+- `callback_tutorial.md`: Callback lifecycle reference with hook timing, direct and registry-based wiring, examples, distributed-training caveats, and testing guidance.
+- `profiler_tutorial.md`: Profiler guide covering when to profile, CPU/CUDA usage, TensorBoard traces, result interpretation, and optimization workflow.
 - `Description.md`: This file. Use it when you need to understand the repository layout or decide where a new feature belongs.
 - `tutorial.md`: Hands-on cookbook for learning the framework and customizing datasets, models, tasks, losses, metrics, optimizers, schedulers, logging, checkpoints, sanity checks, and scripts.
 - `Flowchart.md`: Mermaid diagrams covering every entrypoint, train/eval/sanity flow, artifact layout, registries, and customization edit points.
 - `pyproject.toml`: Python project metadata, dependency/version requirements used by sanity checks, optional extras, console scripts, and pytest settings. Edit this when renaming the project, adding dependencies, or changing package entrypoints.
-- `uv.lock`: Locked dependency graph for reproducible installs with `uv`. Update it after dependency changes if you keep the `uv` workflow.
+- `uv.lock`: Locked dependency graph for reproducible installs with `uv`. Update it after dependency changes if you keep the `uv` workflow. Don't change manually.
 - `ruff.toml`: Dedicated Ruff lint/format configuration. Edit this for line length, target Python version, selected rule families, and ignored rules.
 - `Makefile`: Shortcuts for common local commands: `install`, `sanity`, `train`, `eval`, `test`, `test-cov`, `lint`, `fmt`, and `clean`.
 - `.gitignore`: Ignore rules for generated outputs, checkpoints, processed data, virtual environments, caches, local editor settings, and W&B metadata.
@@ -41,6 +43,8 @@ Model architecture configs. These should contain architecture-only parameters, n
 
 Dataset and dataloader configs. These select a registered dataset and define data-owned shape/label properties, split sizes or split paths, and dataloader options. Models resolve input/output dimensions from these dataset fields when appropriate.
 
+File locations are dataset-owned configuration. `TensorFileDataset` reads `data.splits.<split>.path` from `configs/data/tensor_file.yaml`; relative paths are resolved from the stable repository working directory because Hydra does not change directories. Custom datasets may define a key such as `data.root`, but the key is effective only if that dataset class reads it.
+
 - `configs/data/toy_classification.yaml`: Synthetic vector classification splits. Use for fast trainer, metric, checkpoint, and sanity checks.
 - `configs/data/toy_regression.yaml`: Synthetic vector regression splits. Use with `model=regression_mlp` and `task=regression`.
 - `configs/data/toy_sequence.yaml`: Synthetic token sequence classification splits. Use with `model=small_transformer`.
@@ -51,9 +55,13 @@ Dataset and dataloader configs. These select a registered dataset and define dat
 Task behavior configs. Tasks own the loss, metric list, model output key, and target key.
 
 - `configs/task/classification.yaml`: Single-label classification with `cross_entropy` and `accuracy`.
+- `configs/task/detection.yaml`: Object detection with model-provided loss aggregation, score filtering, NMS, and prediction export.
+- `configs/task/language_modeling.yaml`: Autoregressive token prediction with cross-entropy, token accuracy, and perplexity.
+- `configs/task/ranking.yaml`: Point-wise learning-to-rank with MSE, MAE, and ranked prediction export.
 - `configs/task/regression.yaml`: Regression with `mse` loss plus `mse` and `mae` metrics.
+- `configs/task/segmentation.yaml`: Semantic segmentation with per-pixel cross-entropy and pixel accuracy.
 
-Use this group when your workload changes prediction semantics. For segmentation, detection, ranking, language modeling, or multi-task learning, add a task config and a matching registered task class.
+Use this group when your workload changes prediction semantics. Classification, regression, segmentation, detection, ranking, and language modeling have registered task implementations. Detection mAP, segmentation IoU/Dice, and ranking NDCG/MRR remain optional metric extensions.
 
 ### `configs/optimizer/`
 
@@ -107,9 +115,13 @@ Sanity-check policy. Controls strictness, whether to run model smoke tests, whet
 
 Use this when adapting the template to a new project so sanity checks validate the config keys and smoke-test behavior your project truly depends on.
 
+### `configs/profiler.yaml`
+
+Profiler wrapper config loaded by `scripts/profile.sh`. It owns the profiler smoke workload model, data, task, device, precision, warmup steps, recorded steps, trace directory, and `torch.profiler` options. Edit this file for repeatable profiler customization, or run `PROFILE_CONFIG=<path> bash scripts/profile.sh` for an alternate profiler config.
+
 ### `configs/experiment/`
 
-Experiment presets. These are Hydra global overrides used for repeatable research runs.
+Experiment presets. These are Hydra global overrides used for repeatable research runs. They are not included in the default config composition. An experiment is applied only when explicitly selected with `+experiment=<name>`, at which point it overrides the existing root settings and selected config-group defaults.
 
 - `configs/experiment/baseline.yaml`: Default MLP classification baseline with explicit trainer, optimizer, and model overrides.
 - `configs/experiment/sanity_cpu.yaml`: Tiny CPU run for fast sanity checks and validation.
@@ -135,7 +147,7 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 - `scripts/train.sh`: Wrapper around `uv run python src/main.py`. Pass Hydra overrides after the script name.
 - `scripts/eval.sh`: Wrapper for checkpoint evaluation. First argument is the checkpoint path; extra arguments are Hydra overrides.
 - `scripts/preprocess.sh`: Generates toy tensor-file splits by calling `src/data/preprocess.py`.
-- `scripts/profile.sh`: Runs a tiny profiler workload and writes traces under `outputs/profiles/`. Set `PROFILE_CUDA=1` to include CUDA profiling.
+- `scripts/profile.sh`: Loads `configs/profiler.yaml`, runs the configured profiler workload, and writes traces to `profiler.trace_dir` (`outputs/profiles/` by default). Set `PROFILE_CUDA=1` or `profiler.cuda: true` to include CUDA profiling. See `profiler_tutorial.md` for interpreting traces and using profiler output to optimize code.
 - `scripts/sweep.sh`: Creates and runs a W&B sweep from `configs/sweep.yaml`.
 - `scripts/__init__.py`: Makes `scripts.run_sanity:main` importable as the `ml-sanity` console script from `pyproject.toml`.
 
@@ -168,7 +180,7 @@ Add new architectures here and register them with `@register_model('name')`.
 Datasets, dataloaders, preprocessing, and transforms.
 
 - `src/data/dataset.py`: Registered datasets: toy classification, toy regression, toy sequence, and tensor-file dataset.
-- `src/data/dataloader.py`: Builds train, val, and test dataloaders from the dataset registry. Handles distributed samplers when DDP is active.
+- `src/data/dataloader.py`: Builds train, val, and test dataloaders from the dataset registry. Handles distributed samplers when DDP is active and uses a dataset-provided `collate_fn` for variable-size batches such as detection targets.
 - `src/data/preprocess.py`: Generates file-backed toy tensor splits for `data=tensor_file`.
 - `src/data/transforms.py`: Placeholder transform helpers for train and validation transforms.
 - `src/data/__init__.py`: Public data exports.
@@ -180,6 +192,10 @@ Add real datasets here and keep schema validation close to dataset code.
 Task contracts and task implementations.
 
 - `src/tasks/task.py`: `BaseTask`, `ClassificationTask`, `RegressionTask`, `StepResult`, and `build_task`. Tasks own model-output interpretation, loss calls, metric updates, and prediction record formatting.
+- `src/tasks/segmentation.py`: Per-pixel cross-entropy, ignore-index handling, flattened pixel metrics, and mask prediction export.
+- `src/tasks/detection.py`: Model-provided detection loss aggregation, nested target support, score filtering, NMS, and JSON-safe detection export.
+- `src/tasks/ranking.py`: Point-wise ranking loss and score metrics plus descending ranked-item export.
+- `src/tasks/language_modeling.py`: Flattened next-token loss, ignore-index handling, token metrics, perplexity, and token prediction export.
 - `src/tasks/__init__.py`: Public task exports.
 
 Add a task when the trainer should stay generic but the workload semantics change.
@@ -217,7 +233,7 @@ Use this package for training optimization logic. Do not keep optimizer code ins
 Training and evaluation orchestration.
 
 - `src/engine/trainer.py`: Generic trainer with train/validation/test loops, AMP support, accumulation, clipping, finite-loss checks, callbacks, checkpoint save/resume, early stopping, and exception checkpointing.
-- `src/engine/evaluator.py`: Evaluation and prediction helper that runs a model/task over loaders and returns metrics or prediction records.
+- `src/engine/evaluator.py`: Evaluation and prediction helper that recursively moves nested tensor batches to the target device, supports tasks that return no evaluation loss, and returns metrics or prediction records.
 - `src/engine/__init__.py`: Public engine exports.
 
 Modify this package only for framework-level behavior. For workload-specific behavior, prefer a task, callback, metric, or loss.
@@ -229,7 +245,7 @@ Trainer extension hooks.
 - `src/callbacks/base.py`: `Callback` hook interface and `CallbackList` dispatcher.
 - `src/callbacks/__init__.py`: Public callback exports.
 
-Use callbacks for optional side effects around training events without changing the core trainer.
+Use callbacks for optional side effects around training events without changing the core trainer. See `callback_tutorial.md` for hook timing and examples. Callbacks currently work when passed directly to `Trainer`; `src/main.py` does not yet build them from Hydra config.
 
 ### `src/runtime/`
 
@@ -249,7 +265,7 @@ Shared framework utilities.
 - `src/utils/seed.py`: Reproducibility helpers for Python, NumPy, PyTorch, CUDA, workers, deterministic mode, and rank-aware seeds.
 - `src/utils/types.py`: Shared type aliases and protocols for batches, config dictionaries, model-like objects, datasets, metrics, and schedulers.
 - `src/utils/checkpoint.py`: Fault-tolerant checkpoint manager, RNG state capture/restore, atomic saves, manifest checksums, latest/best lookup, fallback loading, and legacy save/load helpers.
-- `src/utils/run.py`: Config-derived run identity helper. Computes `run.id`, writes resolved config snapshots, appends `outputs/run_registry.jsonl`, and rewrites log/checkpoint/prediction/profile paths under `outputs/runs/<run.id>/`.
+- `src/utils/run.py`: Config-derived run identity helper. Computes `run.id`, writes resolved config snapshots, appends repeat-command metadata to `outputs/run_registry.jsonl`, and rewrites artifact paths under `outputs/runs/<run.id>/` for training or `outputs/evaluations/<run.id>/` for evaluation.
 - `src/utils/paths.py`: Output, checkpoint, log, and prediction path helpers.
 - `src/utils/logger.py`: Console, JSONL, TensorBoard, and W&B logger backends plus logger collection setup.
 - `src/utils/__init__.py`: Utility package marker.
@@ -272,13 +288,16 @@ The old top-level `src/utils/sanity_check.py` file was removed. New and existing
 `tests/` contains CPU-friendly unit and smoke tests. Use it as the first safety net before running expensive experiments.
 
 - `tests/conftest.py`: Shared pytest fixtures, including tiny configs.
-- `tests/test_config.py`: Hydra/config composition checks.
-- `tests/test_dataset.py`: Dataset and dataloader behavior checks.
+- `tests/test_config.py`: Hydra/config composition checks, including all built-in task config options.
+- `tests/test_dataset.py`: Dataset and dataloader behavior checks, including dataset-provided collation for variable-size samples.
 - `tests/test_model.py`: Model forward-shape and model behavior checks.
 - `tests/test_training.py`: Trainer smoke tests.
 - `tests/test_checkpoint.py`: Checkpoint save/load/resume/fault-tolerance tests.
+- `tests/test_run_identity.py`: Stable run-id, training/evaluation output layout, config snapshot, selector, and tracking-id checks.
 - `tests/test_metrics.py`: Metric correctness tests.
+- `tests/test_tasks.py`: Registration, loss, metric, prediction, detection filtering, and nested-device-transfer checks for task implementations.
 - `tests/test_schedulers.py`: Scheduler factory and behavior tests.
+- `tests/test_distributed.py`: Distributed runtime helper checks.
 - `tests/test_sanity.py`: Sanity check smoke test.
 - `tests/__init__.py`: Test package marker.
 
@@ -295,21 +314,21 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
 
 Keep notebooks lightweight. Large generated outputs should stay under ignored output or artifact folders.
 
-
 ## Output Organization
 
 Run artifacts are isolated by a config-derived id instead of by timestamp. At startup, `prepare_run(cfg)` sets:
 
 - `run.id`: readable id derived from `run.name`, model/data/task names, `run.trial`, and `run.config_id`, unless explicitly provided. Existing ids are reused instead of suffixed; fresh duplicate runs warn, while intentional training resumes do not.
 - `run.config_id`: stable hash of the effective experiment config after excluding generated path fields.
-- `run.run_dir`: `outputs/runs/<run.id>` by default.
-- `checkpoint.dir`: `outputs/runs/<run.id>/checkpoints`.
-- `run.log_dir`: `outputs/runs/<run.id>/logs`.
-- `logging.jsonl.path`: `outputs/runs/<run.id>/logs/metrics.jsonl`.
-- `run.prediction_dir`: `outputs/runs/<run.id>/predictions`.
-- `run.profile_dir`: `outputs/runs/<run.id>/profiles`.
+- `run.run_dir`: `outputs/runs/<run.id>` for training or `outputs/evaluations/<run.id>` for evaluation.
+- `checkpoint.dir`: `<run.run_dir>/checkpoints`.
+- `run.log_dir`: `<run.run_dir>/logs`.
+- `logging.jsonl.path`: `<run.run_dir>/logs/metrics.jsonl`.
+- `run.prediction_dir`: `<run.run_dir>/predictions`.
+- `run.profile_dir`: `<run.run_dir>/profiles`.
+- `run.tracking_id`: `<run.id>` for training and `<run.id>_evaluation` for evaluation.
 
-The mapping from id to config is stored in two places: `outputs/run_configs/<run.id>.yaml` for direct inspection and `outputs/run_registry.jsonl` for programmatic lookup across many runs. If a fresh run would reuse an existing run directory or config snapshot, `prepare_run` keeps that id, emits a warning, and writes logs, metrics, predictions, and tracking events into the same run directory. Intentional training resumes with `checkpoint.resume=...` reuse the run directory without the reuse warning. To create separate planned repeats of the same setup without timestamps, override `run.trial` or provide `run.id`. In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while writing evaluation artifacts with `run.id=<run.id>_evaluation`.
+Training config snapshots are stored at `outputs/run_configs/<run.id>.yaml`. Evaluation snapshots are stored at `outputs/evaluations/<run.id>/config.yaml`, which prevents evaluation from overwriting the training config. Both modes append metadata to `outputs/run_registry.jsonl`, including `command` and `command_cwd` for repeating the invocation. Sensitive CLI values are redacted in `command`, but resolved config values are still stored for reproducibility. If a fresh invocation reuses an existing artifact directory or config snapshot, `prepare_run` keeps that id and emits a warning; intentional training resumes suppress that warning. In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training checkpoint folder while all generated evaluation artifacts go to `outputs/evaluations/<run.id>/`.
 
 ## Generated And Ignored Paths
 
