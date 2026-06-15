@@ -10,8 +10,8 @@ Typical usage:
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import torch
 from torch import Tensor
@@ -23,59 +23,74 @@ MetricFn = Callable[[Tensor, Tensor], float]
 
 @register_metric('accuracy')
 def accuracy(logits: Tensor, targets: Tensor) -> float:
+    """Compute single-label classification accuracy."""
     preds = logits.argmax(dim=-1)
     return (preds == targets.long()).float().mean().item()
 
 
 @register_metric('mse')
 def mse(preds: Tensor, targets: Tensor) -> float:
+    """Compute mean squared error."""
     return torch.nn.functional.mse_loss(preds.float(), targets.float()).item()
 
 
 @register_metric('mae')
 def mae(preds: Tensor, targets: Tensor) -> float:
+    """Compute mean absolute error."""
     return torch.nn.functional.l1_loss(preds.float(), targets.float()).item()
 
 
 @dataclass
 class MetricAccumulator:
+    """Accumulate weighted scalar metric values across batches."""
+
     name: str
     fn: MetricFn
     total: float = 0.0
     count: int = 0
 
     def update(self, preds: Tensor, targets: Tensor, n: int | None = None) -> None:
+        """Accumulate one batch of predictions and targets."""
         batch_n = int(n if n is not None else targets.shape[0])
         self.total += float(self.fn(preds.detach().cpu(), targets.detach().cpu())) * batch_n
         self.count += batch_n
 
     def compute(self) -> float:
+        """Return the weighted mean metric value."""
         return self.total / max(1, self.count)
 
     def reset(self) -> None:
+        """Clear accumulated metric state."""
         self.total = 0.0
         self.count = 0
 
 
 @dataclass
 class MetricCollection:
+    """Coordinate a named collection of metric accumulators."""
+
     metrics: dict[str, MetricAccumulator] = field(default_factory=dict)
 
     @classmethod
-    def from_names(cls, names: list[str]) -> 'MetricCollection':
+    def from_names(cls, names: list[str]) -> MetricCollection:
+        """Build a collection from registered metric names."""
         return cls({name: MetricAccumulator(name, METRIC_REGISTRY.get(name)) for name in names})
 
     def update(self, preds: Tensor, targets: Tensor, n: int | None = None) -> None:
+        """Update every metric with one batch."""
         for metric in self.metrics.values():
             metric.update(preds, targets, n=n)
 
     def compute(self) -> dict[str, float]:
+        """Compute all metrics by name."""
         return {name: metric.compute() for name, metric in self.metrics.items()}
 
     def reset(self) -> None:
+        """Reset every metric accumulator."""
         for metric in self.metrics.values():
             metric.reset()
 
 
 def compute_all_metrics(preds: Tensor, targets: Tensor) -> dict[str, float]:
+    """Compute the framework's default metric set."""
     return {'accuracy': accuracy(preds, targets)}

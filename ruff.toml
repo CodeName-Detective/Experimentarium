@@ -1,9 +1,102 @@
-# Dedicated Ruff configuration for this template.
-# Keep lint/format settings here instead of pyproject.toml.
+# Ruff policy for this PyTorch/Hydra research framework.
+#
+# The base policy focuses on defects, reproducibility, maintainability, and
+# research-code safety. Rules that enforce subjective API or documentation
+# styles are intentionally left out; optional stricter policies are documented
+# separately when this configuration is reviewed.
 
-line-length = 120
-target-version = "py310"
+target-version = "py310" # Match the minimum Python version in pyproject.toml.
+line-length = 120 # Used by the formatter; E501 is disabled because formatting owns wrapping.
+respect-gitignore = true # Do not lint files intentionally excluded from version control.
+show-fixes = true # Show the available fix when Ruff reports a violation.
+unsafe-fixes = false # Never apply behavior-changing fixes unless explicitly requested.
+preview = true # Required for the selected DOC (pydoclint) rules.
+
+extend-exclude = [
+    "data", # Local/downloaded datasets are inputs, not maintained source code.
+    "multirun", # Hydra-generated multirun output.
+    "outputs", # Checkpoints, metrics, predictions, and generated run configs.
+    "wandb", # Local Weights & Biases run artifacts.
+]
 
 [lint]
-select = ["E", "F", "B"]
-ignore = ["E501"]
+select = [
+    "E4",   # Pycodestyle: malformed and misplaced imports.
+    "E7",   # Pycodestyle: statement and comparison errors.
+    "E9",   # Pycodestyle: syntax and runtime-invalid constructs.
+    "W",    # Pycodestyle: suspicious whitespace and line-break patterns.
+    "F",    # Pyflakes: undefined names, unused imports, and related correctness issues.
+    "I",    # isort: deterministic import grouping and ordering.
+    "N",    # pep8-naming: consistent module, class, function, and variable names.
+    "UP",   # pyupgrade: syntax appropriate for the supported Python versions.
+    "YTT",  # flake8-2020: safe Python-version checks.
+    "S",    # flake8-bandit: common security mistakes in Python code.
+    "B",    # flake8-bugbear: likely bugs and fragile implementation patterns.
+    "A",    # flake8-builtins: accidental shadowing of Python built-ins.
+    "C4",   # flake8-comprehensions: clearer and more efficient comprehensions.
+    "C90",  # McCabe: flag functions whose control flow becomes too complex.
+    "DTZ",  # flake8-datetimez: require timezone-aware datetime usage.
+    "T10",  # flake8-debugger: prevent committed debugger breakpoints.
+    "EXE",  # flake8-executable: validate executable files and shebangs.
+    "ICN",  # flake8-import-conventions: standard aliases such as numpy as np.
+    "LOG",  # flake8-logging: detect incorrect or fragile logging calls.
+    "G",    # flake8-logging-format: require lazy, structured logging arguments.
+    "ANN",  # flake8-annotations: require typed function and method signatures.
+    "TC",   # flake8-type-checking: separate runtime imports from type-only imports.
+    "D",    # pydocstyle: require and validate documentation structure.
+    "DOC",  # pydoclint: keep docstring parameters and returns aligned with signatures.
+    "PIE",  # flake8-pie: miscellaneous correctness and cleanup checks.
+    "PT",   # flake8-pytest-style: consistent, idiomatic pytest tests.
+    "RSE",  # flake8-raise: remove redundant exception wrapping syntax.
+    "RET",  # flake8-return: detect inconsistent or unnecessary return flow.
+    "SIM",  # flake8-simplify: identify needlessly complex control flow.
+    "PTH",  # flake8-use-pathlib: prefer pathlib for filesystem operations.
+    "NPY",  # NumPy: detect deprecated or unsafe NumPy API usage.
+    "PERF", # Perflint: flag avoidable performance costs in Python paths.
+    "PGH",  # Pygrep-hooks: require precise noqa and type-ignore suppressions.
+    "PLE",  # Pylint errors: detect high-confidence runtime and logic errors.
+    "RUF",  # Ruff-specific: additional correctness and maintainability checks.
+]
+
+ignore = [
+    "E501",   # Formatter controls line length; long URLs/messages may remain intact.
+    "ANN401", # Explicit Any is valid at dynamic config, registry, callback, and serialization boundaries.
+    "D105",   # Magic-method behavior is documented by the containing protocol or class.
+    "D107",   # Constructor behavior is documented by the containing class.
+    "NPY002", # Global NumPy RNG APIs are required for seeding and checkpoint state restoration.
+]
+
+[lint.per-file-ignores]
+"src/losses/losses.py" = [
+    "N812", # torch.nn.functional as F is the standard PyTorch convention.
+]
+"tests/**/*.py" = [
+    "S101", # pytest assertions intentionally use Python's assert statement.
+    "S105", # Test values may resemble passwords without being credentials.
+    "S106", # Test call arguments may contain dummy secret-like values.
+    "S107", # Test helper defaults may contain dummy secret-like values.
+    "ANN",  # Test signatures are defined by pytest fixtures; production code remains fully annotated.
+    "D",    # Descriptive test names replace repetitive test-function docstrings.
+    "DOC",  # Signature-to-docstring checks apply to maintained production APIs.
+    "S404", # Tests may import subprocess to construct inert CompletedProcess fixtures.
+]
+
+[lint.isort]
+known-first-party = ["src"] # Keep project imports separate from third-party dependencies.
+combine-as-imports = true # Combine compatible imports that use aliases.
+
+[lint.mccabe]
+max-complexity = 15 # Allow orchestration code while preventing unreviewable functions.
+
+[lint.pydoclint]
+ignore-one-line-docstrings = true # Validate detailed API docs without forcing boilerplate sections on simple helpers.
+
+[lint.pydocstyle]
+convention = "google" # Use one consistent research-facing docstring convention.
+
+[format]
+quote-style = "single" # Preserve the repository's established single-quote style.
+indent-style = "space" # Use four-space Python indentation.
+line-ending = "auto" # Preserve the platform's existing line-ending convention.
+skip-magic-trailing-comma = false # Respect trailing commas when Ruff lays out collections/calls.
+docstring-code-format = true # Format Python examples embedded in docstrings.

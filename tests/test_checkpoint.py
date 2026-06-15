@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 from src.models import MLP
 from src.utils.checkpoint import CheckpointManager
 

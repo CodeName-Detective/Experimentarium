@@ -32,7 +32,6 @@ from src.runtime.distributed import is_rank0
 
 def get_rng_state(seed_cuda: bool | None = None) -> dict[str, Any]:
     """Capture Python, NumPy, PyTorch CPU, and optional CUDA RNG state."""
-
     state: dict[str, Any] = {
         'python': random.getstate(),
         'numpy': np.random.get_state(),
@@ -46,7 +45,6 @@ def get_rng_state(seed_cuda: bool | None = None) -> dict[str, Any]:
 
 def set_rng_state(state: dict[str, Any]) -> None:
     """Restore RNG state if present in a checkpoint."""
-
     if not state:
         return
     random.setstate(state['python'])
@@ -82,13 +80,20 @@ class CheckpointManager:
         self.manifest_path = self.directory / 'manifest.json'
 
     def is_better(self, metric: float, best: float | None) -> bool:
+        """Return whether a metric improves on the current best value."""
         if best is None:
             return True
         return metric < best if self.mode == 'min' else metric > best
 
-    def save(self, state: dict[str, Any], epoch: int, metric: float | None = None, is_best: bool = False, tag: str | None = None) -> Path | None:
+    def save(
+        self,
+        state: dict[str, Any],
+        epoch: int,
+        metric: float | None = None,
+        is_best: bool = False,
+        tag: str | None = None,
+    ) -> Path | None:
         """Save a checkpoint if policy allows it and update manifest links."""
-
         if not is_rank0():
             return None
         if epoch % self.save_every != 0 and not is_best and tag is None:
@@ -108,7 +113,6 @@ class CheckpointManager:
 
     def save_exception(self, state: dict[str, Any], epoch: int) -> Path | None:
         """Save an exception checkpoint that is not part of normal rotation."""
-
         return self.save(state, epoch=epoch, metric=None, is_best=False, tag='exception')
 
     def _checkpoint_meta(self, epoch: int, metric: float | None, tag: str | None) -> dict[str, Any]:
@@ -174,8 +178,7 @@ class CheckpointManager:
     def _validate_checksum(self, path: Path) -> None:
         manifest = self._read_manifest()
         entries = [
-            entry for entry in manifest.get('checkpoints', [])
-            if entry.get('path') == path.name and entry.get('sha256')
+            entry for entry in manifest.get('checkpoints', []) if entry.get('path') == path.name and entry.get('sha256')
         ]
         if not entries:
             return
@@ -186,7 +189,6 @@ class CheckpointManager:
 
     def candidate_paths(self) -> list[Path]:
         """Return checkpoint candidates newest-first, including manifest links."""
-
         candidates: list[Path] = []
         if self.last_path.exists():
             candidates.append(self.last_path)
@@ -204,12 +206,12 @@ class CheckpointManager:
         return unique
 
     def latest_path(self) -> Path | None:
+        """Return the newest available checkpoint path."""
         candidates = self.candidate_paths()
         return candidates[0] if candidates else None
 
     def resolve_resume_path(self, resume: str | Path) -> Path:
         """Resolve named checkpoint selectors relative to this checkpoint directory."""
-
         value = str(resume).strip()
         selector = value.lower()
         if selector == 'best':
@@ -218,12 +220,20 @@ class CheckpointManager:
             return self.last_path
         match = re.fullmatch(r'(?:epoch[_-]?)?(\d+)(?:\.pt)?', selector)
         if match is not None:
-            return self.directory / f"epoch_{int(match.group(1)):04d}.pt"
+            return self.directory / f'epoch_{int(match.group(1)):04d}.pt'
         return Path(value)
 
-    def load(self, path: str | Path, model, optimizer=None, scheduler=None, scaler=None, strict_model: bool = True, validate_checksum: bool = True) -> dict[str, Any]:
+    def load(
+        self,
+        path: str | Path,
+        model: Any,
+        optimizer: Any | None = None,
+        scheduler: Any | None = None,
+        scaler: Any | None = None,
+        strict_model: bool = True,
+        validate_checksum: bool = True,
+    ) -> dict[str, Any]:
         """Load one checkpoint and restore any provided training objects."""
-
         path = Path(path)
         if validate_checksum and path.name not in {'best.pt', 'last.pt'}:
             self._validate_checksum(path)
@@ -239,14 +249,20 @@ class CheckpointManager:
             set_rng_state(state['rng_state'])
         return state
 
-    def load_latest(self, model, optimizer=None, scheduler=None, scaler=None, strict_model: bool = True) -> dict[str, Any] | None:
+    def load_latest(
+        self,
+        model: Any,
+        optimizer: Any | None = None,
+        scheduler: Any | None = None,
+        scaler: Any | None = None,
+        strict_model: bool = True,
+    ) -> dict[str, Any] | None:
         """Load the newest valid checkpoint; skip corrupt candidates."""
-
         errors: list[str] = []
         for path in self.candidate_paths():
             try:
                 return self.load(path, model, optimizer, scheduler, scaler, strict_model=strict_model)
-            except Exception as exc:
+            except Exception as exc:  # noqa: PERF203 - fallback must test each checkpoint independently.
                 errors.append(f'{path}: {exc}')
                 continue
         if errors:
@@ -255,11 +271,10 @@ class CheckpointManager:
 
     def rotate(self) -> None:
         """Keep recent checkpoints and top-k best metric checkpoints."""
-
         if self.keep_last_k <= 0:
             return
         ckpts = [path for path in self.directory.glob('epoch_*.pt') if '_exception' not in path.stem]
-        recent = set(sorted(ckpts, key=self._extract_epoch)[-self.keep_last_k:])
+        recent = set(sorted(ckpts, key=self._extract_epoch)[-self.keep_last_k :])
         topk = set(self._top_k_paths())
         keep = recent | topk
         for path in ckpts:
@@ -269,10 +284,18 @@ class CheckpointManager:
     def _top_k_paths(self) -> list[Path]:
         if self.save_top_k <= 0:
             return []
-        entries = [entry for entry in self._read_manifest().get('checkpoints', []) if entry.get('metric') is not None and entry.get('tag') is None]
+        entries = [
+            entry
+            for entry in self._read_manifest().get('checkpoints', [])
+            if entry.get('metric') is not None and entry.get('tag') is None
+        ]
         reverse = self.mode == 'max'
         entries = sorted(entries, key=lambda entry: float(entry['metric']), reverse=reverse)
-        return [self.directory / entry['path'] for entry in entries[: self.save_top_k] if (self.directory / entry['path']).exists()]
+        return [
+            self.directory / entry['path']
+            for entry in entries[: self.save_top_k]
+            if (self.directory / entry['path']).exists()
+        ]
 
     def _extract_epoch(self, path: Path) -> int:
         match = re.search(r'epoch_(\d+)', path.name)
@@ -281,6 +304,7 @@ class CheckpointManager:
 
 # Compatibility helpers for older imports.
 def save_checkpoint(state: dict[str, Any], path: str | Path, is_best: bool = False) -> None:
+    """Save a checkpoint through the compatibility interface."""
     path = Path(path)
     manager = CheckpointManager(path.parent)
     manager._atomic_save(state, path)
@@ -288,6 +312,9 @@ def save_checkpoint(state: dict[str, Any], path: str | Path, is_best: bool = Fal
         manager._atomic_save(state, path.parent / 'best.pt')
 
 
-def load_checkpoint(path: str | Path, model, optimizer=None, scheduler=None, scaler=None) -> dict[str, Any]:
+def load_checkpoint(
+    path: str | Path, model: Any, optimizer: Any | None = None, scheduler: Any | None = None, scaler: Any | None = None
+) -> dict[str, Any]:
+    """Load a checkpoint through the compatibility interface."""
     manager = CheckpointManager(Path(path).parent)
     return manager.load(path, model, optimizer, scheduler, scaler, validate_checksum=False)

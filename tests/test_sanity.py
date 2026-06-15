@@ -6,18 +6,24 @@ def test_sanity_checks_run(tiny_cfg):
     assert report.passed
 
 
+def test_exact_version_accepts_cuda_local_suffix():
+    from src.utils.sanity import core
+
+    assert core._version_satisfies('2.5.1+cu121', '==2.5.1')
+
+
 def test_project_requirements_classify_packages_from_pyproject(monkeypatch, tmp_path):
     from src.utils.sanity import core
 
     (tmp_path / 'pyproject.toml').write_text(
-        '''[project]
+        """[project]
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24", "torch>=2.2"]
 
 [project.optional-dependencies]
 tracking = ["wandb>=0.16", "tensorboard>=2.15"]
 vision = ["torchvision>=0.17"]
-'''
+"""
     )
     monkeypatch.setattr(core, '_repo_root', lambda: tmp_path)
 
@@ -32,10 +38,10 @@ def test_project_requirements_do_not_inject_optional_fallbacks(monkeypatch, tmp_
     from src.utils.sanity import core
 
     (tmp_path / 'pyproject.toml').write_text(
-        '''[project]
+        """[project]
 requires-python = ">=3.10"
 dependencies = ["numpy>=1.24"]
-'''
+"""
     )
     monkeypatch.setattr(core, '_repo_root', lambda: tmp_path)
 
@@ -306,7 +312,10 @@ def test_torch_install_recommendation_for_driver_535_prefers_cu121():
     assert recommendation.selected.torch == '2.5.1'
     assert 'torch==2.5.1+cu121' in message
     assert 'https://download.pytorch.org/whl/cu121' in message
-    assert 'python -m pip install "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1" --index-url https://download.pytorch.org/whl/cu121' in message
+    assert (
+        'python -m pip install "torch==2.5.1" "torchvision==0.20.1" "torchaudio==2.5.1" --index-url https://download.pytorch.org/whl/cu121'
+        in message
+    )
 
 
 def test_cuda_diagnostics_recommendation_works_without_torch(monkeypatch):
@@ -333,4 +342,3 @@ def test_cuda_diagnostics_recommendation_works_without_torch(monkeypatch):
     assert 'PyTorch is not installed' in diagnostics.compatibility_message
     assert recommendation.selected.cuda_tag == 'cu121'
     assert 'torch==2.5.1+cu121' in cuda.format_torch_install_recommendation(recommendation)
-

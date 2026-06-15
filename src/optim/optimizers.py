@@ -12,19 +12,26 @@ Typical usage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
-from torch.optim import Optimizer
 
 from src.utils.config import cfg_get
 from src.utils.registry import OPTIMIZER_REGISTRY, register_optimizer
 
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
-def parameter_groups(model: torch.nn.Module, cfg) -> list[dict]:
+    from torch.optim import Optimizer
+
+    from src.utils.types import ConfigType
+
+
+def parameter_groups(model: torch.nn.Module, cfg: ConfigType) -> list[dict[str, object]]:
     """Build parameter groups with optional norm/bias weight-decay exclusion."""
-
     weight_decay = float(cfg_get(cfg, 'weight_decay', 0.0))
     no_decay = bool(cfg_get(cfg, 'no_decay_norm_bias', True))
-    if not no_decay or weight_decay == 0.0:
+    if not no_decay or not weight_decay:
         return [{'params': [p for p in model.parameters() if p.requires_grad], 'weight_decay': weight_decay}]
     decay_params = []
     no_decay_params = []
@@ -35,7 +42,7 @@ def parameter_groups(model: torch.nn.Module, cfg) -> list[dict]:
             no_decay_params.append(param)
         else:
             decay_params.append(param)
-    groups = []
+    groups: list[dict[str, object]] = []
     if decay_params:
         groups.append({'params': decay_params, 'weight_decay': weight_decay})
     if no_decay_params:
@@ -44,7 +51,8 @@ def parameter_groups(model: torch.nn.Module, cfg) -> list[dict]:
 
 
 @register_optimizer('adamw')
-def build_adamw(params, cfg) -> Optimizer:
+def build_adamw(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigType) -> Optimizer:
+    """Build an AdamW optimizer from configuration."""
     return torch.optim.AdamW(
         params,
         lr=float(cfg_get(cfg, 'lr', 1e-3)),
@@ -56,12 +64,18 @@ def build_adamw(params, cfg) -> Optimizer:
 
 
 @register_optimizer('adam')
-def build_adam(params, cfg) -> Optimizer:
-    return torch.optim.Adam(params, lr=float(cfg_get(cfg, 'lr', 1e-3)), weight_decay=float(cfg_get(cfg, 'weight_decay', 0.0)))
+def build_adam(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigType) -> Optimizer:
+    """Build an Adam optimizer from configuration."""
+    return torch.optim.Adam(
+        params,
+        lr=float(cfg_get(cfg, 'lr', 1e-3)),
+        weight_decay=float(cfg_get(cfg, 'weight_decay', 0.0)),
+    )
 
 
 @register_optimizer('sgd')
-def build_sgd(params, cfg) -> Optimizer:
+def build_sgd(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigType) -> Optimizer:
+    """Build an SGD optimizer from configuration."""
     return torch.optim.SGD(
         params,
         lr=float(cfg_get(cfg, 'lr', 0.1)),
@@ -71,7 +85,8 @@ def build_sgd(params, cfg) -> Optimizer:
     )
 
 
-def build_optimizer(model: torch.nn.Module, cfg) -> Optimizer:
+def build_optimizer(model: torch.nn.Module, cfg: ConfigType) -> Optimizer:
+    """Build the configured optimizer for a model."""
     opt_cfg = cfg_get(cfg, 'optimizer', cfg)
     name = cfg_get(opt_cfg, 'name', 'adamw')
     params = parameter_groups(model, opt_cfg)

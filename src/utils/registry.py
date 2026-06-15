@@ -12,7 +12,10 @@ Typical usage:
 
 from __future__ import annotations
 
-from typing import Any, Callable, Iterable
+from collections.abc import Callable, Iterable
+from typing import Any, TypeVar
+
+RegistryItem = TypeVar('RegistryItem', bound=Callable[..., Any])
 
 
 class Registry:
@@ -20,33 +23,39 @@ class Registry:
 
     def __init__(self, register_name: str) -> None:
         self._register_name = register_name
-        self._store: dict[str, Any] = {}
+        self._store: dict[str, Callable[..., Any]] = {}
 
-    def register(self, item_name: str) -> Callable[[Any], Any]:
-        def decorator(item: Any) -> Any:
+    def register(self, item_name: str) -> Callable[[RegistryItem], RegistryItem]:
+        """Create a decorator that registers a callable under ``item_name``."""
+
+        def decorator(item: RegistryItem) -> RegistryItem:
             if item_name in self._store:
                 raise KeyError(f"{self._register_name} registry already has '{item_name}'")
             self._store[item_name] = item
             return item
+
         return decorator
 
     def build(self, item_name: str, *args: Any, **kwargs: Any) -> Any:
+        """Construct a registered item with the supplied arguments."""
         return self.get(item_name)(*args, **kwargs)
 
-    def get(self, item_name: str) -> Any:
+    def get(self, item_name: str) -> Callable[..., Any]:
+        """Return the callable registered under ``item_name``."""
         if item_name not in self._store:
             available = sorted(self._store.keys())
             raise KeyError(f"'{item_name}' not in {self._register_name} registry. Available: {available}")
         return self._store[item_name]
 
     def keys(self) -> Iterable[str]:
+        """Return the registered names."""
         return self._store.keys()
 
     def __contains__(self, item_name: str) -> bool:
         return item_name in self._store
 
     def __repr__(self) -> str:
-        return f"Registry({self._register_name}): {sorted(self._store.keys())}"
+        return f'Registry({self._register_name}): {sorted(self._store.keys())}'
 
 
 MODEL_REGISTRY = Registry('model')
@@ -60,37 +69,46 @@ CALLBACK_REGISTRY = Registry('callback')
 LOGGER_REGISTRY = Registry('logger')
 
 
-def register_model(name: str):
+def register_model(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a model factory or class."""
     return MODEL_REGISTRY.register(name)
 
 
-def register_dataset(name: str):
+def register_dataset(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a dataset factory or class."""
     return DATASET_REGISTRY.register(name)
 
 
-def register_loss(name: str):
+def register_loss(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a loss factory or class."""
     return LOSS_REGISTRY.register(name)
 
 
-def register_metric(name: str):
+def register_metric(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a metric function or class."""
     return METRIC_REGISTRY.register(name)
 
 
-def register_optimizer(name: str):
+def register_optimizer(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register an optimizer factory."""
     return OPTIMIZER_REGISTRY.register(name)
 
 
-def register_scheduler(name: str):
+def register_scheduler(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a scheduler factory."""
     return SCHEDULER_REGISTRY.register(name)
 
 
-def register_task(name: str):
+def register_task(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a task factory or class."""
     return TASK_REGISTRY.register(name)
 
 
-def register_callback(name: str):
+def register_callback(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a callback factory or class."""
     return CALLBACK_REGISTRY.register(name)
 
 
-def register_logger(name: str):
+def register_logger(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a logger factory or class."""
     return LOGGER_REGISTRY.register(name)

@@ -16,13 +16,16 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import hydra
-from omegaconf import DictConfig
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
 
 from src.utils.config import cfg_get
 from src.utils.paths import make_output_dirs
@@ -32,6 +35,7 @@ from src.utils.sanity import run_sanity_checks
 
 @hydra.main(config_path='../configs', config_name='config', version_base='1.3')
 def main(cfg: DictConfig) -> None:
+    """Run the configured training or evaluation workflow."""
     prepare_run(cfg)
     make_output_dirs(cfg)
     strict = bool(cfg_get(cfg, 'sanity.strict', True))

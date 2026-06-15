@@ -143,5 +143,6 @@ def test_prepare_run_eval_checkpoint_selectors_use_evaluation_run_dir(tmp_path, 
         assert eval_info.run_id == f'{train_info.run_id}_evaluation'
         assert eval_info.run_dir == str(Path(tmp_path, 'runs', f'{train_info.run_id}_evaluation'))
         assert eval_cfg['checkpoint']['resume'] == str(Path(checkpoint_dir, expected_name))
-        assert eval_cfg['checkpoint']['dir'] == str(Path(tmp_path, 'runs', f'{train_info.run_id}_evaluation', 'checkpoints'))
-
+        assert eval_cfg['checkpoint']['dir'] == str(
+            Path(tmp_path, 'runs', f'{train_info.run_id}_evaluation', 'checkpoints')
+        )

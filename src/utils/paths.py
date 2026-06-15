@@ -11,8 +11,12 @@ Typical usage:
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from src.utils.config import cfg_get
+
+if TYPE_CHECKING:
+    from src.utils.types import ConfigType
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 SRC_DIR = BASE_DIR / 'src'
@@ -25,7 +29,8 @@ PREDICTION_DIR = OUTPUT_DIR / 'predictions'
 PROFILE_DIR = OUTPUT_DIR / 'profiles'
 
 
-def make_output_dirs(cfg=None) -> None:
+def make_output_dirs(cfg: ConfigType | None = None) -> None:
+    """Create configured output, checkpoint, log, and prediction directories."""
     for key, default in (
         ('run.output_dir', OUTPUT_DIR),
         ('run.run_dir', cfg_get(cfg, 'run.run_dir', OUTPUT_DIR)),
@@ -39,14 +44,17 @@ def make_output_dirs(cfg=None) -> None:
 
 
 def get_checkpoint_path(run_id: str, epoch: int, val_loss: float) -> Path:
+    """Return the conventional checkpoint path for an epoch."""
     run_dir = CHECKPOINT_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     return run_dir / f'epoch_{epoch:03d}_val_loss_{val_loss:.4f}.pt'
 
 
 def get_log_path(run_id: str) -> Path:
+    """Return the conventional log path for a run."""
     return LOG_DIR / f'{run_id}.log'
 
 
 def get_prediction_path(run_id: str, split: str = 'test') -> Path:
+    """Return the conventional prediction path for a dataset split."""
     return PREDICTION_DIR / f'{run_id}_{split}.json'

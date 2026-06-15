@@ -12,17 +12,20 @@ Typical usage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Protocol, Tuple, Union
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.optim.lr_scheduler import LRScheduler
 
-PathLike = Union[str, Path]
-Device = Union[str, torch.device]
+PathLike = str | Path
+Device = str | torch.device
 DType = torch.dtype
-Scalar = Union[int, float]
+Scalar = int | float
 Seed = int
 
 FloatTensor = Tensor
@@ -30,50 +33,79 @@ LongTensor = Tensor
 BoolMask = Tensor
 BatchTensor = Tensor
 
-BatchDict = Dict[str, Tensor]
-MetricDict = Dict[str, float]
-ConfigDict = Dict[str, Any]
-LossDict = Dict[str, Tensor]
+BatchDict = dict[str, Tensor]
+MetricDict = dict[str, float]
+ConfigDict = dict[str, Any]
+LossDict = dict[str, Tensor]
 
-StepOutput = Dict[str, Union[Tensor, float]]
-TrainState = Tuple[int, int]
+StepOutput = dict[str, Tensor | float]
+TrainState = tuple[int, int]
 Split = str
 
-CheckpointDict = Dict[str, Any]
-PredRecord = Dict[str, Any]
-PredList = List[PredRecord]
+CheckpointDict = dict[str, Any]
+PredRecord = dict[str, Any]
+PredList = list[PredRecord]
 
 
 class ModelProtocol(Protocol):
-    def forward(self, batch: BatchDict) -> StepOutput: ...
-    def parameters(self) -> Iterator[nn.Parameter]: ...
-    def train(self, mode: bool = True) -> 'ModelProtocol': ...
-    def eval(self) -> 'ModelProtocol': ...
-    def to(self, device: Device) -> 'ModelProtocol': ...
+    """Structural interface required from trainable models."""
+
+    def forward(self, batch: BatchDict) -> StepOutput:
+        """Compute model outputs for a batch."""
+
+    def parameters(self) -> Iterator[nn.Parameter]:
+        """Iterate over trainable model parameters."""
+
+    def train(self, mode: bool = True) -> ModelProtocol:
+        """Set training mode and return the model."""
+
+    def eval(self) -> ModelProtocol:
+        """Set evaluation mode and return the model."""
+
+    def to(self, device: Device) -> ModelProtocol:
+        """Move the model to a device and return it."""
 
 
 class DatasetProtocol(Protocol):
+    """Structural interface required from indexed datasets."""
+
     def __len__(self) -> int: ...
+
     def __getitem__(self, idx: int) -> BatchDict: ...
 
 
 class MetricProtocol(Protocol):
-    def update(self, preds: Tensor, targets: Tensor) -> None: ...
-    def compute(self) -> Tensor: ...
-    def reset(self) -> None: ...
+    """Structural interface required from stateful metrics."""
+
+    def update(self, preds: Tensor, targets: Tensor) -> None:
+        """Accumulate predictions and targets."""
+
+    def compute(self) -> Tensor:
+        """Compute the current metric value."""
+
+    def reset(self) -> None:
+        """Clear accumulated metric state."""
 
 
 class SchedulerProtocol(Protocol):
-    def step(self, metrics: Optional[float] = None) -> None: ...
-    def state_dict(self) -> ConfigDict: ...
-    def load_state_dict(self, state: ConfigDict) -> None: ...
+    """Structural interface required from learning-rate schedulers."""
+
+    def step(self, metrics: float | None = None) -> None:
+        """Advance the scheduler by one step."""
+
+    def state_dict(self) -> ConfigDict:
+        """Return serializable scheduler state."""
+
+    def load_state_dict(self, state: ConfigDict) -> None:
+        """Restore scheduler state."""
 
 
-AnyScheduler = Union[LRScheduler, SchedulerProtocol]
-AnyModel = Union[nn.Module, nn.DataParallel, nn.parallel.DistributedDataParallel]
+AnyScheduler = LRScheduler | SchedulerProtocol
+AnyModel = nn.Module | nn.DataParallel | nn.parallel.DistributedDataParallel
 
 try:
     from omegaconf import DictConfig
-    ConfigType = Union[DictConfig, ConfigDict]
+
+    ConfigType = DictConfig | ConfigDict
 except ImportError:
     ConfigType = ConfigDict  # type: ignore[misc]

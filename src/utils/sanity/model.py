@@ -12,7 +12,8 @@ import torch
 
 def run_model_smoke(model: torch.nn.Module, batch: dict[str, torch.Tensor], loss: torch.Tensor) -> bool:
     """Run backward on a provided loss and return whether finite gradients exist."""
-
     model.zero_grad(set_to_none=True)
     loss.backward()
-    return any(p.grad is not None and torch.isfinite(p.grad).all().item() for p in model.parameters() if p.requires_grad)
+    return any(
+        p.grad is not None and torch.isfinite(p.grad).all().item() for p in model.parameters() if p.requires_grad
+    )

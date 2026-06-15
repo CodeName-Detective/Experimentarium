@@ -16,19 +16,24 @@ Registered models:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
 import torch.nn as nn
 
 from src.utils.config import cfg_get
 from src.utils.registry import register_model
 
+if TYPE_CHECKING:
+    from src.utils.types import ConfigType
+
 
 @register_model('mlp')
 @register_model('baseline')
 class MLP(nn.Module):
-    """Small MLP for vector classification/regression toy experiments."""
+    """Small MLP for vector classification and regression experiments."""
 
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg: ConfigType) -> None:
         super().__init__()
         input_dim = int(cfg_get(cfg, 'input_dim', 16))
         hidden_dim = int(cfg_get(cfg, 'hidden_dim', 64))
@@ -44,6 +49,7 @@ class MLP(nn.Module):
         self.head = nn.Linear(dim, output_dim)
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Compute logits for a vector input batch."""
         x = batch['input'].float()
         return {'logits': self.head(self.encoder(x))}
 
@@ -52,7 +58,7 @@ class MLP(nn.Module):
 class SmallCNN(nn.Module):
     """Compact CNN for CIFAR-like image classification smoke tests."""
 
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg: ConfigType) -> None:
         super().__init__()
         in_channels = int(cfg_get(cfg, 'in_channels', 3))
         width = int(cfg_get(cfg, 'width', 32))
@@ -73,6 +79,7 @@ class SmallCNN(nn.Module):
         )
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Compute image-classification logits."""
         return {'logits': self.net(batch['input'].float())}
 
 
@@ -80,7 +87,7 @@ class SmallCNN(nn.Module):
 class SmallTransformer(nn.Module):
     """Minimal transformer encoder for sequence classification experiments."""
 
-    def __init__(self, cfg) -> None:
+    def __init__(self, cfg: ConfigType) -> None:
         super().__init__()
         vocab_size = int(cfg_get(cfg, 'vocab_size', 128))
         d_model = int(cfg_get(cfg, 'd_model', 64))
@@ -91,11 +98,17 @@ class SmallTransformer(nn.Module):
         dropout = float(cfg_get(cfg, 'dropout', 0.1))
         self.token = nn.Embedding(vocab_size, d_model)
         self.position = nn.Parameter(torch.zeros(1, max_len, d_model))
-        layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=num_heads, dropout=dropout, batch_first=True)
+        layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=num_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
         self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
         self.head = nn.Linear(d_model, num_classes)
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        """Compute sequence-classification logits."""
         tokens = batch['input'].long()
         x = self.token(tokens) + self.position[:, : tokens.shape[1]]
         x = self.encoder(x)

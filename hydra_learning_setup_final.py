@@ -1,93 +1,106 @@
-"""
-╔══════════════════════════════════════════════════════════════════════════════════╗
-║           HYDRA CONFIG FRAMEWORK — COMPLETE LEARNING REPOSITORY SETUP          ║
-║                    Run this in Google Colab to get started                     ║
-╚══════════════════════════════════════════════════════════════════════════════════╝
+"""Generate a complete Hydra learning repository.
 
-HOW TO USE:
-  1. Upload this file to Google Colab  (or paste into a cell)
-  2. Run it:  !python hydra_learning_setup.py
-  3. Follow the printed tutorial — it walks you through every concept in order.
-
-What this creates:
-  hydra_tutorial/
-  ├── 00_basics/
-  ├── 01_config_groups/
-  ├── 02_overrides/
-  ├── 03_interpolation/
-  ├── 04_structured_configs/
-  ├── 05_instantiate/
-  ├── 06_multirun/
-  ├── 07_plugins/
-  ├── 08_real_world_ml/
-  └── README.md
+Run this script in Google Colab or locally to create a progressive tutorial that
+covers Hydra basics, config groups, overrides, interpolation, structured configs,
+object instantiation, multirun, plugins, and a realistic ML project.
 """
 
-import os, sys, subprocess, textwrap
+import os
+import subprocess  # noqa: S404 - used only to install declared tutorial dependencies.
+import sys
+import textwrap
+from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-ROOT = "hydra_tutorial"
+ROOT = Path('hydra_tutorial')
 
-def write(path: str, content: str):
-    full = os.path.join(ROOT, path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "w") as f:
-        f.write(textwrap.dedent(content).lstrip("\n"))
 
-def append_file(path: str, content: str):
+def write(path: str, content: str) -> None:
+    """Write dedented content to a generated tutorial file."""
+    full = ROOT / path
+    full.parent.mkdir(exist_ok=True, parents=True)
+    with full.open('w', encoding='utf-8') as f:
+        f.write(textwrap.dedent(content).lstrip('\n'))
+
+
+def append_file(path: str, content: str) -> None:
     """Append dedented text to a generated file inside ROOT."""
-    full = os.path.join(ROOT, path)
-    os.makedirs(os.path.dirname(full), exist_ok=True)
-    with open(full, "a") as f:
-        f.write("\n" + textwrap.dedent(content).lstrip("\n"))
+    full = ROOT / path
+    full.parent.mkdir(exist_ok=True, parents=True)
+    with full.open('a', encoding='utf-8') as f:
+        f.write('\n' + textwrap.dedent(content).lstrip('\n'))
 
-def banner(text: str, char: str = "═"):
+
+def banner(text: str, char: str = '═') -> None:
+    """Print a tutorial banner."""
     width = 80
-    print("\n" + char * width)
-    print(f"  {text}")
+    print('\n' + char * width)
+    print(f'  {text}')
     print(char * width)
 
-def section(title: str):
-    print(f"\n{'─' * 70}")
-    print(f"  📁  {title}")
+
+def section(title: str) -> None:
+    """Print a tutorial section heading."""
+    print(f'\n{"─" * 70}')
+    print(f'  📁  {title}')
     print('─' * 70)
 
-def note(text: str):
+
+def note(text: str) -> None:
+    """Print wrapped explanatory text."""
     for line in textwrap.wrap(text, 76):
-        print(f"  {line}")
+        print(f'  {line}')
 
-def cmd(text: str):
-    print(f"\n  \033[92m$\033[0m  {text}")
 
-def install_hydra():
-    banner("STEP 0 — Installing hydra-core & omegaconf")
+def cmd(text: str) -> None:
+    """Print a shell command prompt."""
+    print(f'\n  \033[92m$\033[0m  {text}')
+
+
+def install_hydra() -> None:
+    """Install Hydra and the tutorial launcher dependency."""
+    banner('STEP 0 — Installing hydra-core & omegaconf')
     # --break-system-packages needed on Colab / Ubuntu 24+ / PEP 668 envs
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "hydra-core", "omegaconf",
-         "hydra-joblib-launcher", "--quiet", "--break-system-packages"],
-        capture_output=True, text=True
+        [
+            sys.executable,
+            '-m',
+            'pip',
+            'install',
+            'hydra-core',
+            'omegaconf',
+            'hydra-joblib-launcher',
+            '--quiet',
+            '--break-system-packages',
+        ],
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         # Fallback without the flag (older pip / virtualenv)
         subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "hydra-core", "omegaconf",
-             "hydra-joblib-launcher", "--quiet"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            [sys.executable, '-m', 'pip', 'install', 'hydra-core', 'omegaconf', 'hydra-joblib-launcher', '--quiet'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
-    print("  ✅  hydra-core installed successfully")
+    print('  ✅  hydra-core installed successfully')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 0 — BASICS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_00_basics():
-    section("00_basics — Your first Hydra app")
 
-    write("00_basics/conf/config.yaml", """
+def create_00_basics() -> None:
+    """Create the introductory Hydra lesson."""
+    section('00_basics — Your first Hydra app')
+
+    write(
+        '00_basics/conf/config.yaml',
+        """
         # The root config file.
         # Hydra reads this when you run the app.
         # Access values with dot notation: cfg.db.host
@@ -103,9 +116,12 @@ def create_00_basics():
           epochs: 10
           batch_size: 32
           device: cpu
-    """)
+    """,
+    )
 
-    write("00_basics/app.py", """
+    write(
+        '00_basics/app.py',
+        """
         \"\"\"
         LESSON 0 — The simplest possible Hydra app.
 
@@ -138,9 +154,12 @@ def create_00_basics():
 
         if __name__ == "__main__":
             main()
-    """)
+    """,
+    )
 
-    write("00_basics/LESSON.md", """
+    write(
+        '00_basics/LESSON.md',
+        """
         # Lesson 0 — Basics
 
         ## Run the app (default config)
@@ -167,20 +186,25 @@ def create_00_basics():
         - Types are preserved from YAML: port=5432 is int, lr=0.001 is float.
         - Hydra auto-creates `outputs/YYYY-MM-DD/HH-MM-SS/` and chdirs there.
           Your script's CWD is that outputs dir when running.
-    """)
+    """,
+    )
 
-    note("Created: 00_basics/ with app.py + conf/config.yaml")
+    note('Created: 00_basics/ with app.py + conf/config.yaml')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 1 — CONFIG GROUPS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_01_config_groups():
-    section("01_config_groups — Swapping config blocks")
+
+def create_01_config_groups() -> None:
+    """Create the configuration-groups lesson."""
+    section('01_config_groups — Swapping config blocks')
 
     # ── db group ──
-    write("01_config_groups/conf/db/postgres.yaml", """
+    write(
+        '01_config_groups/conf/db/postgres.yaml',
+        """
         # @package _global_
         db:
           driver: postgresql
@@ -189,15 +213,21 @@ def create_01_config_groups():
           user: postgres
           password: secret
           pool_size: 10
-    """)
-    write("01_config_groups/conf/db/sqlite.yaml", """
+    """,
+    )
+    write(
+        '01_config_groups/conf/db/sqlite.yaml',
+        """
         # @package _global_
         db:
           driver: sqlite
           path: /tmp/app.db
           pool_size: 1
-    """)
-    write("01_config_groups/conf/db/mysql.yaml", """
+    """,
+    )
+    write(
+        '01_config_groups/conf/db/mysql.yaml',
+        """
         # @package _global_
         db:
           driver: mysql
@@ -206,10 +236,13 @@ def create_01_config_groups():
           user: root
           password: root
           pool_size: 5
-    """)
+    """,
+    )
 
     # ── model group ──
-    write("01_config_groups/conf/model/small.yaml", """
+    write(
+        '01_config_groups/conf/model/small.yaml',
+        """
         # @package _global_
         model:
           name: transformer_small
@@ -218,8 +251,11 @@ def create_01_config_groups():
           num_heads: 4
           dropout: 0.1
           max_seq_len: 512
-    """)
-    write("01_config_groups/conf/model/medium.yaml", """
+    """,
+    )
+    write(
+        '01_config_groups/conf/model/medium.yaml',
+        """
         # @package _global_
         model:
           name: transformer_medium
@@ -228,8 +264,11 @@ def create_01_config_groups():
           num_heads: 8
           dropout: 0.2
           max_seq_len: 1024
-    """)
-    write("01_config_groups/conf/model/large.yaml", """
+    """,
+    )
+    write(
+        '01_config_groups/conf/model/large.yaml',
+        """
         # @package _global_
         model:
           name: transformer_large
@@ -238,10 +277,13 @@ def create_01_config_groups():
           num_heads: 16
           dropout: 0.1
           max_seq_len: 2048
-    """)
+    """,
+    )
 
     # ── optimizer group ──
-    write("01_config_groups/conf/optimizer/adam.yaml", """
+    write(
+        '01_config_groups/conf/optimizer/adam.yaml',
+        """
         # @package _global_
         optimizer:
           name: adam
@@ -249,8 +291,11 @@ def create_01_config_groups():
           betas: [0.9, 0.999]
           eps: 1.0e-8
           weight_decay: 0.0
-    """)
-    write("01_config_groups/conf/optimizer/sgd.yaml", """
+    """,
+    )
+    write(
+        '01_config_groups/conf/optimizer/sgd.yaml',
+        """
         # @package _global_
         optimizer:
           name: sgd
@@ -258,8 +303,11 @@ def create_01_config_groups():
           momentum: 0.9
           weight_decay: 1.0e-4
           nesterov: true
-    """)
-    write("01_config_groups/conf/optimizer/adamw.yaml", """
+    """,
+    )
+    write(
+        '01_config_groups/conf/optimizer/adamw.yaml',
+        """
         # @package _global_
         optimizer:
           name: adamw
@@ -267,10 +315,13 @@ def create_01_config_groups():
           betas: [0.9, 0.95]
           eps: 1.0e-8
           weight_decay: 0.1
-    """)
+    """,
+    )
 
     # ── root config ──
-    write("01_config_groups/conf/config.yaml", """
+    write(
+        '01_config_groups/conf/config.yaml',
+        """
         defaults:
           - db: postgres          # loads conf/db/postgres.yaml
           - model: small          # loads conf/model/small.yaml
@@ -280,9 +331,12 @@ def create_01_config_groups():
         experiment_name: baseline
         seed: 42
         debug: false
-    """)
+    """,
+    )
 
-    write("01_config_groups/train.py", """
+    write(
+        '01_config_groups/train.py',
+        """
         \"\"\"
         LESSON 1 — Config groups: swap entire config blocks at runtime.
 
@@ -305,7 +359,7 @@ def create_01_config_groups():
             print(f"Seed       : {cfg.seed}")
             print()
             print(f"Database   : {cfg.db.driver} @ {cfg.db.get('host', cfg.db.get('path'))}")
-            print(f"Model      : {cfg.model.name}  ({cfg.model.hidden_size}d × {cfg.model.num_layers}L)")
+            print(f"Model      : {cfg.model.name}  ({cfg.model.hidden_size}d x {cfg.model.num_layers}L)")
             print(f"Optimizer  : {cfg.optimizer.name}  (lr={cfg.optimizer.lr})")
             print()
             print("--- Full merged config ---")
@@ -313,9 +367,12 @@ def create_01_config_groups():
 
         if __name__ == "__main__":
             train()
-    """)
+    """,
+    )
 
-    write("01_config_groups/LESSON.md", """
+    write(
+        '01_config_groups/LESSON.md',
+        """
         # Lesson 1 — Config Groups
 
         ## Default (postgres + small + adam)
@@ -361,19 +418,24 @@ def create_01_config_groups():
         - Without `_global_`, Hydra normally places a group config under its group path.
         - `_self_` controls merge precedence, not hierarchy. Later values win on overlap.
         - Avoid overlapping ownership: let `optimizer/` own `optimizer.*`, `model/` own `model.*`, etc.
-    """)
+    """,
+    )
 
-    note("Created: 01_config_groups/ with db/model/optimizer groups")
+    note('Created: 01_config_groups/ with db/model/optimizer groups')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 2 — OVERRIDES (deep dive)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_02_overrides():
-    section("02_overrides — Every override syntax explained")
 
-    write("02_overrides/conf/config.yaml", """
+def create_02_overrides() -> None:
+    """Create the command-line overrides lesson."""
+    section('02_overrides — Every override syntax explained')
+
+    write(
+        '02_overrides/conf/config.yaml',
+        """
         app:
           name: myapp
           debug: false
@@ -389,9 +451,12 @@ def create_02_overrides():
         server:
           host: 0.0.0.0
           port: 8080
-    """)
+    """,
+    )
 
-    write("02_overrides/demo.py", """
+    write(
+        '02_overrides/demo.py',
+        """
         \"\"\"
         LESSON 2 — CLI override operators and shell quoting.
 
@@ -423,9 +488,12 @@ def create_02_overrides():
 
         if __name__ == "__main__":
             demo()
-    """)
+    """,
+    )
 
-    write("02_overrides/LESSON.md", r"""
+    write(
+        '02_overrides/LESSON.md',
+        r"""
         # Lesson 2 — Override Syntax and Shell Quoting
 
         Run all commands from `02_overrides/`.
@@ -519,14 +587,19 @@ def create_02_overrides():
         ```
 
         `--cfg job` means: print the application/job config and exit.
-    """)
+    """,
+    )
 
-    note("Created: 02_overrides/ — override operators, quoting, + vs ++")
+    note('Created: 02_overrides/ — override operators, quoting, + vs ++')
 
-def create_03_interpolation():
-    section("03_interpolation — Variable references & resolvers")
 
-    write("03_interpolation/conf/config.yaml", """
+def create_03_interpolation() -> None:
+    """Create the configuration interpolation lesson."""
+    section('03_interpolation — Variable references & resolvers')
+
+    write(
+        '03_interpolation/conf/config.yaml',
+        """
         project: hydra_demo
         version: "1.0"
         env: development
@@ -563,9 +636,12 @@ def create_03_interpolation():
 
         # Calls a Python resolver registered in app.py. It does not select a file.
         log_level: ${choose_log_level:${env}}
-    """)
+    """,
+    )
 
-    write("03_interpolation/app.py", """
+    write(
+        '03_interpolation/app.py',
+        """
         \"\"\"
         LESSON 3 — Interpolation and OmegaConf resolvers.
 
@@ -620,9 +696,12 @@ def create_03_interpolation():
 
         if __name__ == "__main__":
             main()
-    """)
+    """,
+    )
 
-    write("03_interpolation/LESSON.md", r"""
+    write(
+        '03_interpolation/LESSON.md',
+        r"""
         # Lesson 3 — Interpolation
 
         ## Basic run
@@ -698,14 +777,19 @@ def create_03_interpolation():
         ```
 
         This returns `fallback_value` instead of crashing if the key is missing.
-    """)
+    """,
+    )
 
-    note("Created: 03_interpolation/ with clearer resolver and lazy examples")
+    note('Created: 03_interpolation/ with clearer resolver and lazy examples')
 
-def create_04_structured_configs():
-    section("04_structured_configs — Typed configs with dataclasses")
 
-    write("04_structured_configs/schemas.py", """
+def create_04_structured_configs() -> None:
+    """Create the structured-configs lesson."""
+    section('04_structured_configs — Typed configs with dataclasses')
+
+    write(
+        '04_structured_configs/schemas.py',
+        """
         \"\"\"
         Structured config schemas using Python dataclasses.
 
@@ -770,9 +854,12 @@ def create_04_structured_configs():
             # Hydra's +key=value can intentionally append unknown keys.
             # This flag lets app.py reject those extras after composition.
             strict_no_extra_keys: bool = True
-    """)
+    """,
+    )
 
-    write("04_structured_configs/conf/config.yaml", """
+    write(
+        '04_structured_configs/conf/config.yaml',
+        """
         # Critical: this activates the dataclass schema.
         defaults:
           - app_schema
@@ -801,9 +888,12 @@ def create_04_structured_configs():
           batch_size: 64
           mixed_precision: true
           tags: [experiment, structured]
-    """)
+    """,
+    )
 
-    write("04_structured_configs/conf/config_missing.yaml", """
+    write(
+        '04_structured_configs/conf/config_missing.yaml',
+        """
         # Intentionally missing required fields.
         defaults:
           - app_schema
@@ -816,9 +906,12 @@ def create_04_structured_configs():
         #   experiment_name
         #   db.name
         #   db.password
-    """)
+    """,
+    )
 
-    write("04_structured_configs/conf/config_plain.yaml", """
+    write(
+        '04_structured_configs/conf/config_plain.yaml',
+        """
         # Plain YAML version: no schema in defaults.
         experiment_name: plain_yaml_example
         seed: 123
@@ -827,9 +920,12 @@ def create_04_structured_configs():
           password: hunter2
         training:
           epochs: 20
-    """)
+    """,
+    )
 
-    write("04_structured_configs/app.py", """
+    write(
+        '04_structured_configs/app.py',
+        """
         \"\"\"
         LESSON 4 — Structured configs + ConfigStore.
 
@@ -905,9 +1001,12 @@ def create_04_structured_configs():
                 print(f"tags type      : {type(cfg.training.tags)}")
         if __name__ == "__main__":
             main()
-    """)
+    """,
+    )
 
-    write("04_structured_configs/LESSON.md", r"""
+    write(
+        '04_structured_configs/LESSON.md',
+        r"""
         # Lesson 4 — Structured Configs
 
         Structured configs are optional. They can be overkill for fast PhD
@@ -1049,14 +1148,19 @@ def create_04_structured_configs():
         For most research code, start with YAML-only Hydra plus manual sanity
         checks. Add structured configs later for stable sections like training,
         optimizer, checkpointing, and logging.
-    """)
+    """,
+    )
 
-    note("Created: 04_structured_configs/ with working schema activation")
+    note('Created: 04_structured_configs/ with working schema activation')
 
-def create_05_instantiate():
-    section("05_instantiate — Building Python objects from YAML")
 
-    write("05_instantiate/conf/config.yaml", """
+def create_05_instantiate() -> None:
+    """Create the object-instantiation lesson."""
+    section('05_instantiate — Building Python objects from YAML')
+
+    write(
+        '05_instantiate/conf/config.yaml',
+        """
         defaults:
           - optimizer: adam
           - scheduler: cosine
@@ -1077,43 +1181,58 @@ def create_05_instantiate():
           hidden_size: 256
           output_size: 10
           dropout: 0.2
-    """)
+    """,
+    )
 
-    write("05_instantiate/conf/optimizer/adam.yaml", """
+    write(
+        '05_instantiate/conf/optimizer/adam.yaml',
+        """
         # @package _global_
         optimizer:
           _target_: components.FakeAdam
           lr: 0.001
           betas: [0.9, 0.999]
           weight_decay: 0.0
-    """)
+    """,
+    )
 
-    write("05_instantiate/conf/optimizer/sgd.yaml", """
+    write(
+        '05_instantiate/conf/optimizer/sgd.yaml',
+        """
         # @package _global_
         optimizer:
           _target_: components.FakeSGD
           lr: 0.01
           momentum: 0.9
           nesterov: true
-    """)
+    """,
+    )
 
-    write("05_instantiate/conf/scheduler/cosine.yaml", """
+    write(
+        '05_instantiate/conf/scheduler/cosine.yaml',
+        """
         # @package _global_
         scheduler:
           _target_: components.FakeCosineScheduler
           T_max: 100
           eta_min: 1.0e-6
-    """)
+    """,
+    )
 
-    write("05_instantiate/conf/scheduler/step.yaml", """
+    write(
+        '05_instantiate/conf/scheduler/step.yaml',
+        """
         # @package _global_
         scheduler:
           _target_: components.FakeStepScheduler
           step_size: 30
           gamma: 0.1
-    """)
+    """,
+    )
 
-    write("05_instantiate/components.py", """
+    write(
+        '05_instantiate/components.py',
+        """
         \"\"\"
         Fake components to demonstrate instantiate().
         In a real project these would be torch.nn.Module, torch.optim, etc.
@@ -1166,9 +1285,12 @@ def create_05_instantiate():
                 self.gamma = gamma
             def __repr__(self):
                 return f"StepScheduler(step_size={self.step_size}, gamma={self.gamma})"
-    """)
+    """,
+    )
 
-    write("05_instantiate/app.py", """
+    write(
+        '05_instantiate/app.py',
+        """
         \"\"\"
         LESSON 5 — hydra.utils.instantiate()
 
@@ -1223,9 +1345,12 @@ def create_05_instantiate():
 
         if __name__ == "__main__":
             main()
-    """)
+    """,
+    )
 
-    write("05_instantiate/LESSON.md", r"""
+    write(
+        '05_instantiate/LESSON.md',
+        r"""
         # Lesson 5 — instantiate()
 
         ## Default run (Adam optimizer + Cosine scheduler)
@@ -1306,19 +1431,24 @@ def create_05_instantiate():
         Registry:      models, datasets, losses, metrics, trainers
         instantiate(): optional; useful for stable third-party constructors
         ```
-    """)
+    """,
+    )
 
-    note("Created: 05_instantiate/ with _target_ and _partial_ demos")
+    note('Created: 05_instantiate/ with _target_ and _partial_ demos')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 6 — MULTIRUN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_06_multirun():
-    section("06_multirun — Sweeping over config combinations")
 
-    write("06_multirun/conf/config.yaml", """
+def create_06_multirun() -> None:
+    """Create the multirun and sweep lesson."""
+    section('06_multirun — Sweeping over config combinations')
+
+    write(
+        '06_multirun/conf/config.yaml',
+        """
         defaults:
           - model: small
           - optimizer: adam
@@ -1326,39 +1456,54 @@ def create_06_multirun():
 
         experiment_name: sweep
         seed: 42
-    """)
+    """,
+    )
 
-    write("06_multirun/conf/model/small.yaml", """
+    write(
+        '06_multirun/conf/model/small.yaml',
+        """
         # @package _global_
         model:
           name: small
           hidden_size: 128
           num_layers: 2
-    """)
+    """,
+    )
 
-    write("06_multirun/conf/model/large.yaml", """
+    write(
+        '06_multirun/conf/model/large.yaml',
+        """
         # @package _global_
         model:
           name: large
           hidden_size: 512
           num_layers: 8
-    """)
+    """,
+    )
 
-    write("06_multirun/conf/optimizer/adam.yaml", """
+    write(
+        '06_multirun/conf/optimizer/adam.yaml',
+        """
         # @package _global_
         optimizer:
           name: adam
           lr: 0.001
-    """)
+    """,
+    )
 
-    write("06_multirun/conf/optimizer/sgd.yaml", """
+    write(
+        '06_multirun/conf/optimizer/sgd.yaml',
+        """
         # @package _global_
         optimizer:
           name: sgd
           lr: 0.01
-    """)
+    """,
+    )
 
-    write("06_multirun/train.py", """
+    write(
+        '06_multirun/train.py',
+        """
         \"\"\"
         LESSON 6 — Multirun.
 
@@ -1391,9 +1536,12 @@ def create_06_multirun():
 
         if __name__ == "__main__":
             train()
-    """)
+    """,
+    )
 
-    write("06_multirun/LESSON.md", r"""
+    write(
+        '06_multirun/LESSON.md',
+        r"""
         # Lesson 6 — Multirun
 
         Run all commands from `06_multirun/`.
@@ -1489,14 +1637,19 @@ def create_06_multirun():
         hcfg.overrides.task
         hcfg.runtime.output_dir
         ```
-    """)
+    """,
+    )
 
-    note("Created: 06_multirun/ with corrected -m and logging explanation")
+    note('Created: 06_multirun/ with corrected -m and logging explanation')
 
-def create_07_plugins():
-    section("07_plugins — Advanced patterns")
 
-    write("07_plugins/conf/config.yaml", """
+def create_07_plugins() -> None:
+    """Create the Hydra plugins lesson."""
+    section('07_plugins — Advanced patterns')
+
+    write(
+        '07_plugins/conf/config.yaml',
+        """
         defaults:
           - _self_
           - override hydra/output: custom   # override hydra's own output config
@@ -1506,9 +1659,12 @@ def create_07_plugins():
 
         # Packages: control where a config group's keys land in the tree
         # See conf/extra/ for examples
-    """)
+    """,
+    )
 
-    write("07_plugins/conf/hydra/output/custom.yaml", """
+    write(
+        '07_plugins/conf/hydra/output/custom.yaml',
+        """
         # Override Hydra's default output dir structure.
         # This config goes under hydra/output/ and overrides hydra's built-in.
         run:
@@ -1516,9 +1672,12 @@ def create_07_plugins():
         sweep:
           dir: sweeps/${now:%Y-%m-%d}
           subdir: ${hydra.job.num}
-    """)
+    """,
+    )
 
-    write("07_plugins/conf/extra/logging.yaml", """
+    write(
+        '07_plugins/conf/extra/logging.yaml',
+        """
         # @package _global_
         # Using @package _global_ puts keys at the top level,
         # not nested under 'extra.logging'
@@ -1526,9 +1685,12 @@ def create_07_plugins():
           level: INFO
           format: "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
           file: ${project}_run.log
-    """)
+    """,
+    )
 
-    write("07_plugins/conf/extra/callbacks.yaml", """
+    write(
+        '07_plugins/conf/extra/callbacks.yaml',
+        """
         # @package _global_
         callbacks:
           early_stopping:
@@ -1539,9 +1701,12 @@ def create_07_plugins():
             save_top_k: 3
             monitor: val_acc
             mode: max
-    """)
+    """,
+    )
 
-    write("07_plugins/app.py", """
+    write(
+        '07_plugins/app.py',
+        """
         \"\"\"
         LESSON 7 — Advanced patterns:
 
@@ -1580,9 +1745,12 @@ def create_07_plugins():
 
         if __name__ == "__main__":
             main()
-    """)
+    """,
+    )
 
-    write("07_plugins/advanced_patterns.py", """
+    write(
+        '07_plugins/advanced_patterns.py',
+        """
         \"\"\"
         Advanced pattern: config groups with @package directive.
 
@@ -1627,9 +1795,12 @@ def create_07_plugins():
 
         if __name__ == "__main__":
             demo_compose_api()
-    """)
+    """,
+    )
 
-    write("07_plugins/LESSON.md", r"""
+    write(
+        '07_plugins/LESSON.md',
+        r"""
         # Lesson 7 — Advanced Patterns
 
         ## Run the main app
@@ -1680,19 +1851,24 @@ def create_07_plugins():
         ```
         This makes Hydra NOT change the CWD and NOT create output dirs.
         Useful for interactive scripts.
-    """)
+    """,
+    )
 
-    note("Created: 07_plugins/ with @package, compose API, and path helpers")
+    note('Created: 07_plugins/ with @package, compose API, and path helpers')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MODULE 8 — REAL WORLD ML PROJECT
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_08_real_world():
-    section("08_real_world_ml — Production-style ML project")
 
-    write("08_real_world_ml/conf/config.yaml", """
+def create_08_real_world() -> None:
+    """Create the realistic ML project lesson."""
+    section('08_real_world_ml — Production-style ML project')
+
+    write(
+        '08_real_world_ml/conf/config.yaml',
+        """
         defaults:
           - dataset: mnist
           - model: cnn
@@ -1720,9 +1896,12 @@ def create_08_real_world():
           sweep:
             dir: sweeps/${experiment_name}
             subdir: ${hydra.job.num}
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/dataset/mnist.yaml", """
+    write(
+        '08_real_world_ml/conf/dataset/mnist.yaml',
+        """
         # @package _global_
         dataset:
           _target_: project.data.FakeDataset
@@ -1733,9 +1912,12 @@ def create_08_real_world():
           train_split: 0.9
           num_workers: 4
           pin_memory: true
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/dataset/cifar10.yaml", """
+    write(
+        '08_real_world_ml/conf/dataset/cifar10.yaml',
+        """
         # @package _global_
         dataset:
           _target_: project.data.FakeDataset
@@ -1746,9 +1928,12 @@ def create_08_real_world():
           train_split: 0.9
           num_workers: 8
           pin_memory: true
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/model/cnn.yaml", """
+    write(
+        '08_real_world_ml/conf/model/cnn.yaml',
+        """
         # @package _global_
         model:
           _target_: project.models.FakeCNN
@@ -1757,9 +1942,12 @@ def create_08_real_world():
           num_classes: ${dataset.num_classes}   # interpolate from dataset!
           hidden_channels: [32, 64, 128]
           dropout: 0.3
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/model/resnet.yaml", """
+    write(
+        '08_real_world_ml/conf/model/resnet.yaml',
+        """
         # @package _global_
         model:
           _target_: project.models.FakeResNet
@@ -1768,9 +1956,12 @@ def create_08_real_world():
           num_classes: ${dataset.num_classes}
           pretrained: false
           dropout: 0.1
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/optimizer/adamw.yaml", """
+    write(
+        '08_real_world_ml/conf/optimizer/adamw.yaml',
+        """
         # @package _global_
         optimizer:
           _target_: project.optimizers.FakeAdamW
@@ -1778,9 +1969,12 @@ def create_08_real_world():
           betas: [0.9, 0.95]
           weight_decay: 0.05
           eps: 1.0e-8
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/optimizer/sgd.yaml", """
+    write(
+        '08_real_world_ml/conf/optimizer/sgd.yaml',
+        """
         # @package _global_
         optimizer:
           _target_: project.optimizers.FakeSGD
@@ -1788,27 +1982,36 @@ def create_08_real_world():
           momentum: 0.9
           weight_decay: 5.0e-4
           nesterov: true
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/scheduler/cosine.yaml", """
+    write(
+        '08_real_world_ml/conf/scheduler/cosine.yaml',
+        """
         # @package _global_
         scheduler:
           _target_: project.schedulers.FakeCosineScheduler
           T_max: ${training.epochs}   # interpolate from training config!
           eta_min: 1.0e-6
           warmup_epochs: 5
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/scheduler/onecycle.yaml", """
+    write(
+        '08_real_world_ml/conf/scheduler/onecycle.yaml',
+        """
         # @package _global_
         scheduler:
           _target_: project.schedulers.FakeOneCycleLR
           max_lr: ${optimizer.lr}
           epochs: ${training.epochs}
           pct_start: 0.3
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/callbacks/default.yaml", """
+    write(
+        '08_real_world_ml/conf/callbacks/default.yaml',
+        """
         # @package _global_
         callbacks:
           early_stopping:
@@ -1825,17 +2028,23 @@ def create_08_real_world():
             save_last: true
           lr_monitor:
             logging_interval: step
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/logger/console.yaml", """
+    write(
+        '08_real_world_ml/conf/logger/console.yaml',
+        """
         # @package _global_
         logger:
           _target_: project.loggers.ConsoleLogger
           level: INFO
           log_every_n_steps: 10
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/logger/wandb.yaml", """
+    write(
+        '08_real_world_ml/conf/logger/wandb.yaml',
+        """
         # @package _global_
         logger:
           _target_: project.loggers.FakeWandbLogger
@@ -1843,9 +2052,12 @@ def create_08_real_world():
           name: ${run_id}
           tags: [hydra, tutorial]
           log_model: true
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/conf/training.yaml", """
+    write(
+        '08_real_world_ml/conf/training.yaml',
+        """
         # @package _global_
         training:
           epochs: 50
@@ -1856,11 +2068,14 @@ def create_08_real_world():
           val_check_interval: 1.0
           limit_train_batches: 1.0
           limit_val_batches: 1.0
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/project/__init__.py", "")
+    write('08_real_world_ml/project/__init__.py', '')
 
-    write("08_real_world_ml/project/data.py", """
+    write(
+        '08_real_world_ml/project/data.py',
+        """
         class FakeDataset:
             def __init__(self, name, data_dir, image_size, num_classes,
                          train_split=0.9, num_workers=4, pin_memory=True):
@@ -1869,10 +2084,13 @@ def create_08_real_world():
                 self.image_size = image_size
                 self.num_classes = num_classes
             def __repr__(self):
-                return f"Dataset({self.name}, {self.image_size}×{self.image_size}, classes={self.num_classes})"
-    """)
+                return f"Dataset({self.name}, {self.image_size}x{self.image_size}, classes={self.num_classes})"
+    """,
+    )
 
-    write("08_real_world_ml/project/models.py", """
+    write(
+        '08_real_world_ml/project/models.py',
+        """
         class FakeCNN:
             def __init__(self, name, in_channels, num_classes, hidden_channels, dropout=0.0):
                 self.name = name
@@ -1889,9 +2107,12 @@ def create_08_real_world():
                 self.pretrained = pretrained
             def __repr__(self):
                 return f"ResNet({self.name}, pretrained={self.pretrained}, out={self.num_classes})"
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/project/optimizers.py", """
+    write(
+        '08_real_world_ml/project/optimizers.py',
+        """
         class FakeAdamW:
             def __init__(self, lr, betas, weight_decay=0.0, eps=1e-8):
                 self.lr = lr
@@ -1906,9 +2127,12 @@ def create_08_real_world():
                 self.momentum = momentum
             def __repr__(self):
                 return f"SGD(lr={self.lr}, momentum={self.momentum})"
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/project/schedulers.py", """
+    write(
+        '08_real_world_ml/project/schedulers.py',
+        """
         class FakeCosineScheduler:
             def __init__(self, T_max, eta_min=0.0, warmup_epochs=0):
                 self.T_max = T_max
@@ -1923,9 +2147,12 @@ def create_08_real_world():
                 self.epochs = epochs
             def __repr__(self):
                 return f"OneCycleLR(max_lr={self.max_lr}, epochs={self.epochs})"
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/project/loggers.py", """
+    write(
+        '08_real_world_ml/project/loggers.py',
+        """
         class ConsoleLogger:
             def __init__(self, level="INFO", log_every_n_steps=10):
                 self.level = level
@@ -1940,9 +2167,12 @@ def create_08_real_world():
                 self.tags = list(tags) if tags else []
             def __repr__(self):
                 return f"WandbLogger(project={self.project}, run={self.name})"
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/train.py", """
+    write(
+        '08_real_world_ml/train.py',
+        """
         \"\"\"
         LESSON 8 — Production-style ML project with Hydra.
 
@@ -1991,9 +2221,12 @@ def create_08_real_world():
 
         if __name__ == "__main__":
             train()
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/LESSON.md", r"""
+    write(
+        '08_real_world_ml/LESSON.md',
+        r"""
         # Lesson 8 — Real-World ML Project
 
         All commands from 08_real_world_ml/.
@@ -2013,7 +2246,7 @@ def create_08_real_world():
         python train.py experiment_name=wandb_test logger=wandb
         ```
 
-        ## Full sweep: dataset × model × optimizer (8 runs)
+        ## Full sweep: dataset x model x optimizer (8 runs)
         ```
         python train.py -m \
             experiment_name=big_sweep \
@@ -2041,17 +2274,22 @@ def create_08_real_world():
         python train.py  # ← ERROR: experiment_name is missing
         python train.py experiment_name=my_run  # ← OK
         ```
-    """)
+    """,
+    )
 
-    note("Created: 08_real_world_ml/ — full ML project with all patterns combined")
+    note('Created: 08_real_world_ml/ — full ML project with all patterns combined')
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # README
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_readme():
-    write("README.md", """
+
+def create_readme() -> None:
+    """Create the generated tutorial repository README."""
+    write(
+        'README.md',
+        """
         # Hydra Config Framework — Complete Tutorial Repository
 
         Generated by `hydra_learning_setup.py`. Work through lessons in order.
@@ -2128,20 +2366,29 @@ def create_readme():
         ```
 
         Use Hydra instantiate only where it improves clarity.
-    """)
+    """,
+    )
 
 
-def create_code_walkthroughs():
+def create_code_walkthroughs() -> None:
     """Create detailed code walkthroughs that explain which lines cause each Hydra behavior."""
-    section("Detailed lesson walkthroughs — why each code/config line matters")
+    section('Detailed lesson walkthroughs — why each code/config line matters')
 
     lessons = [
-        "00_basics", "01_config_groups", "02_overrides", "03_interpolation",
-        "04_structured_configs", "05_instantiate", "06_multirun",
-        "07_plugins", "08_real_world_ml",
+        '00_basics',
+        '01_config_groups',
+        '02_overrides',
+        '03_interpolation',
+        '04_structured_configs',
+        '05_instantiate',
+        '06_multirun',
+        '07_plugins',
+        '08_real_world_ml',
     ]
     for lesson in lessons:
-        append_file(f"{lesson}/LESSON.md", """
+        append_file(
+            f'{lesson}/LESSON.md',
+            """
             ---
 
             ## Read next
@@ -2152,9 +2399,12 @@ def create_code_walkthroughs():
             ```bash
             cat CODE_WALKTHROUGH.md
             ```
-        """)
+        """,
+        )
 
-    append_file("README.md", """
+    append_file(
+        'README.md',
+        """
         ## Added explanatory walkthroughs
 
         Each lesson folder now includes:
@@ -2172,9 +2422,12 @@ def create_code_walkthroughs():
 
         for a practical subset of Hydra features that is enough for most
         research ML code.
-    """)
+    """,
+    )
 
-    write("00_basics/CODE_WALKTHROUGH.md", r"""
+    write(
+        '00_basics/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 0 Code Walkthrough — Basics
 
         ## What this lesson is teaching
@@ -2277,9 +2530,12 @@ def create_code_walkthroughs():
 
         `job` means the application config that your code receives. It is not a
         key you created. It is a Hydra debug mode.
-    """)
+    """,
+    )
 
-    write("01_config_groups/CODE_WALKTHROUGH.md", r"""
+    write(
+        '01_config_groups/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 1 Code Walkthrough — Config Groups
 
         ## What this lesson is teaching
@@ -2378,9 +2634,12 @@ def create_code_walkthroughs():
 
         If many files define the same key, the final result may be correct, but
         the config becomes harder to reason about.
-    """)
+    """,
+    )
 
-    write("02_overrides/CODE_WALKTHROUGH.md", r"""
+    write(
+        '02_overrides/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 2 Code Walkthrough — CLI Overrides
 
         ## What this lesson is teaching
@@ -2486,9 +2745,12 @@ def create_code_walkthroughs():
         Hydra/OmegaConf usually protects the config from accidental unknown keys.
         `open_dict` temporarily unlocks it so the code can add `runtime_id`.
         This is Python-side mutation, separate from CLI overrides.
-    """)
+    """,
+    )
 
-    write("03_interpolation/CODE_WALKTHROUGH.md", r"""
+    write(
+        '03_interpolation/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 3 Code Walkthrough — Interpolation and Resolvers
 
         ## What this lesson is teaching
@@ -2603,9 +2865,12 @@ def create_code_walkthroughs():
         return `fallback_value` instead of raising an interpolation error.
 
         It is useful for optional config blocks.
-    """)
+    """,
+    )
 
-    write("04_structured_configs/CODE_WALKTHROUGH.md", r"""
+    write(
+        '04_structured_configs/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 4 Code Walkthrough — Structured Configs
 
         ## What this lesson is teaching
@@ -2760,9 +3025,12 @@ def create_code_walkthroughs():
 
         Keep rapidly changing model/dataset experiments as plain YAML if that is
         faster for exploration.
-    """)
+    """,
+    )
 
-    write("05_instantiate/CODE_WALKTHROUGH.md", r"""
+    write(
+        '05_instantiate/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 5 Code Walkthrough — instantiate() vs Registry
 
         ## What this lesson is teaching
@@ -2866,9 +3134,12 @@ def create_code_walkthroughs():
         Models/datasets/losses/metrics -> Registry
         Optimizers/schedulers          -> Registry or instantiate, your choice
         ```
-    """)
+    """,
+    )
 
-    write("06_multirun/CODE_WALKTHROUGH.md", r"""
+    write(
+        '06_multirun/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 6 Code Walkthrough — Multirun and Sweeps
 
         ## What this lesson is teaching
@@ -2907,7 +3178,7 @@ def create_code_walkthroughs():
         means:
 
         ```text
-        2 models × 2 optimizers = 4 jobs
+        2 models x 2 optimizers = 4 jobs
         ```
 
         ## `glob(*)`
@@ -2952,9 +3223,12 @@ def create_code_walkthroughs():
         By default Hydra uses the basic launcher, so jobs run locally and usually
         sequentially. You can later switch to joblib/SLURM/Ray launchers without
         rewriting your training loop.
-    """)
+    """,
+    )
 
-    write("07_plugins/CODE_WALKTHROUGH.md", r"""
+    write(
+        '07_plugins/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 7 Code Walkthrough — Advanced Patterns
 
         ## What this lesson is teaching
@@ -3007,9 +3281,12 @@ def create_code_walkthroughs():
 
         Learn these, but do not overuse them early. The most valuable advanced
         feature for research is usually path handling with `to_absolute_path`.
-    """)
+    """,
+    )
 
-    write("08_real_world_ml/CODE_WALKTHROUGH.md", r"""
+    write(
+        '08_real_world_ml/CODE_WALKTHROUGH.md',
+        r"""
         # Lesson 8 Code Walkthrough — Real-World ML Layout
 
         ## What this lesson is teaching
@@ -3082,9 +3359,12 @@ def create_code_walkthroughs():
         ```
 
         The config group idea remains exactly the same either way.
-    """)
+    """,
+    )
 
-    write("PHD_RESEARCH_GUIDE.md", r"""
+    write(
+        'PHD_RESEARCH_GUIDE.md',
+        r"""
         # Practical Hydra Subset for PhD Research Code
 
         You do not need every Hydra feature.
@@ -3152,12 +3432,15 @@ def create_code_walkthroughs():
 
         Avoid defining the same key in many places unless the override is very
         intentional.
-    """)
+    """,
+    )
 
-    note("Created: CODE_WALKTHROUGH.md files for every lesson")
+    note('Created: CODE_WALKTHROUGH.md files for every lesson')
 
-def print_tutorial():
-    banner("HYDRA TUTORIAL — STUDY GUIDE (2–3 hours)", "═")
+
+def print_tutorial() -> None:
+    """Print the recommended tutorial study sequence."""
+    banner('HYDRA TUTORIAL — STUDY GUIDE (2-3 hours)', '═')
 
     print("""
   Work through the lessons in order. Each builds on the last.
@@ -3178,7 +3461,7 @@ def print_tutorial():
   ╚══════════════════════════════════════════════════════════════╝
 """)
 
-    banner("LESSON 0 — BASICS", "─")
+    banner('LESSON 0 — BASICS', '─')
     print("""
   The anatomy of a Hydra app:
 
@@ -3197,7 +3480,7 @@ def print_tutorial():
     python app.py --cfg job                    # print config, don't run
 """)
 
-    banner("LESSON 1 — CONFIG GROUPS", "─")
+    banner('LESSON 1 — CONFIG GROUPS', '─')
     print("""
   Config groups = swappable YAML blocks.
 
@@ -3223,7 +3506,7 @@ def print_tutorial():
     python train.py --info defaults       # see what was loaded
 """)
 
-    banner("LESSON 2 — OVERRIDES", "─")
+    banner('LESSON 2 — OVERRIDES', '─')
     print("""
   Override operators:
     key=value       update existing key only
@@ -3245,7 +3528,7 @@ def print_tutorial():
     python demo.py +server="{host:127.0.0.1,port:9090,ssl:true}"
 """)
 
-    banner("LESSON 3 — INTERPOLATION", "─")
+    banner('LESSON 3 — INTERPOLATION', '─')
     print("""
   Reference other config values with ${key.path}:
 
@@ -3263,7 +3546,7 @@ def print_tutorial():
     # YAML: ${upper:${project}}
 """)
 
-    banner("LESSON 4 — STRUCTURED CONFIGS", "─")
+    banner('LESSON 4 — STRUCTURED CONFIGS', '─')
     print("""
   Use dataclasses for typed schemas:
 
@@ -3289,7 +3572,7 @@ def print_tutorial():
   YAML values override those defaults but must match the schema.
 """)
 
-    banner("LESSON 5 — INSTANTIATE", "─")
+    banner('LESSON 5 — INSTANTIATE', '─')
     print("""
   Build Python objects directly from YAML:
 
@@ -3310,7 +3593,7 @@ def print_tutorial():
     python train.py optimizer=sgd
 """)
 
-    banner("LESSON 6 — MULTIRUN", "─")
+    banner('LESSON 6 — MULTIRUN', '─')
     print("""
   Normal single runs do NOT need -m:
 
@@ -3322,7 +3605,7 @@ def print_tutorial():
     # → 3 runs with lr=0.1, lr=0.01, lr=0.001
 
     python train.py -m model=small,large optimizer=adam,sgd
-    # → 4 runs (2×2 grid)
+    # → 4 runs (2x2 grid)
 
     python train.py -m 'optimizer.lr=range(0.001,0.1,0.01)'
     # → range sweep
@@ -3336,7 +3619,7 @@ def print_tutorial():
     python train.py -m hydra/launcher=joblib hydra.launcher.n_jobs=4 ...
 """)
 
-    banner("LESSON 7 — ADVANCED", "─")
+    banner('LESSON 7 — ADVANCED', '─')
     print("""
   @package directive — control where keys land:
     # @package _global_       root of tree
@@ -3355,14 +3638,14 @@ def print_tutorial():
     python app.py 'hydra.output_subdir=null' hydra.run.dir=.
 """)
 
-    banner("LESSON 8 — REAL WORLD ML", "─")
+    banner('LESSON 8 — REAL WORLD ML', '─')
     print("""
   Everything combined in a single project.
   Key patterns:
     • All components have _target_ → instantiate them
     • Cross-config interpolation (model gets num_classes from dataset)
     • experiment_name: ??? forces you to always name your run
-    • Multirun sweep across datasets × models × optimizers
+    • Multirun sweep across datasets x models x optimizers
 
   Try:
     cd hydra_tutorial/08_real_world_ml
@@ -3372,7 +3655,7 @@ def print_tutorial():
         dataset=mnist,cifar10 model=cnn,resnet optimizer=adamw,sgd
 """)
 
-    banner("DONE! Files created. Start with:", "═")
+    banner('DONE! Files created. Start with:', '═')
     print("""
     cd hydra_tutorial/00_basics
     python app.py
@@ -3388,13 +3671,15 @@ def print_tutorial():
 # MAIN
 # ─────────────────────────────────────────────────────────────────────────────
 
-def main():
-    banner("HYDRA TUTORIAL REPO SETUP")
-    print(f"\n  Creating repo at: {os.path.abspath(ROOT)}\n")
+
+def main() -> None:
+    """Install dependencies and generate the complete tutorial repository."""
+    banner('HYDRA TUTORIAL REPO SETUP')
+    print(f'\n  Creating repo at: {ROOT.resolve()}\n')
 
     install_hydra()
 
-    os.makedirs(ROOT, exist_ok=True)
+    ROOT.mkdir(exist_ok=True, parents=True)
 
     create_00_basics()
     create_01_config_groups()
@@ -3408,15 +3693,15 @@ def main():
     create_readme()
     create_code_walkthroughs()
 
-    banner("ALL FILES CREATED ✅")
-    print(f"\n  Repo location: {os.path.abspath(ROOT)}")
+    banner('ALL FILES CREATED ✅')
+    print(f'\n  Repo location: {ROOT.resolve()}')
 
     # Count files
     total = sum(len(files) for _, _, files in os.walk(ROOT))
-    print(f"  Total files  : {total}")
+    print(f'  Total files  : {total}')
 
     print_tutorial()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

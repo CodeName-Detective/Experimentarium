@@ -19,15 +19,18 @@ from __future__ import annotations
 import importlib
 import netrc as netrc_module
 import os
-from importlib import metadata as importlib_metadata
 import re
 import shutil
 import socket
 import sys
 from dataclasses import dataclass, field
+from importlib import metadata as importlib_metadata
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from src.utils.config import cfg_get
 from src.utils.sanity.cuda import collect_cuda_diagnostics, format_torch_install_recommendation, recommend_torch_install
@@ -53,6 +56,7 @@ class CheckResult:
 
     @property
     def status(self) -> str:
+        """Return PASS, WARN, or FAIL for display."""
         return 'PASS' if self.passed else 'WARN' if self.warning else 'FAIL'
 
 
@@ -64,17 +68,21 @@ class SanityReport:
 
     @property
     def failures(self) -> list[CheckResult]:
+        """Return non-warning failed checks."""
         return [result for result in self.results if not result.passed and not result.warning]
 
     @property
     def warnings(self) -> list[CheckResult]:
+        """Return warning-level failed checks."""
         return [result for result in self.results if result.warning and not result.passed]
 
     @property
     def passed(self) -> bool:
+        """Return whether the report has no hard failures."""
         return not self.failures
 
     def add(self, name: str, passed: bool, message: str = '', warning: bool = False, always_show: bool = False) -> None:
+        """Append one check result to the report."""
         self.results.append(
             CheckResult(
                 name=name,
@@ -86,6 +94,7 @@ class SanityReport:
         )
 
     def print_summary(self) -> None:
+        """Print a human-readable report summary."""
         print('\nSANITY CHECK REPORT')
         print('=' * 72)
         for result in self.results:
@@ -93,7 +102,9 @@ class SanityReport:
             detail = f' - {result.message}' if result.message and show_detail else ''
             print(f'{result.status:4} {result.name}{detail}')
         print('=' * 72)
-        print(f'passed={sum(r.passed for r in self.results)} warnings={len(self.warnings)} failures={len(self.failures)}')
+        print(
+            f'passed={sum(r.passed for r in self.results)} warnings={len(self.warnings)} failures={len(self.failures)}'
+        )
 
 
 @dataclass(frozen=True)
@@ -119,7 +130,6 @@ class ProjectRequirements:
 
 def bootstrap_registries() -> None:
     """Import packages that register models, datasets, tasks, losses, metrics, and optimizers."""
-
     import src.data  # noqa: F401
     import src.losses  # noqa: F401
     import src.metrics  # noqa: F401
@@ -146,7 +156,6 @@ def _load_toml(path: Path) -> dict[str, Any]:
 
 def _parse_pyproject_fallback(path: Path) -> dict[str, Any]:
     """Small pyproject parser used only when tomllib/tomli are unavailable."""
-
     project: dict[str, Any] = {}
     optional: dict[str, list[str]] = {}
     section = ''
@@ -219,7 +228,7 @@ def _flatten_optional_requirements(optional_dependencies: Any) -> tuple[str, ...
 
 
 def _parse_requirement(raw: str) -> RequirementSpec:
-    requirement, marker = (raw.split(';', 1) + [''])[:2]
+    requirement, marker = [*raw.split(';', 1), ''][:2]
     match = re.match(r'\s*([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*(.*)', requirement)
     if not match:
         return RequirementSpec(raw=raw, name=raw.strip(), marker=marker.strip())
@@ -248,7 +257,10 @@ def _version_satisfies(installed: str, specifier: str) -> bool:
     if not specifier:
         return True
     comparisons = re.findall(r'(>=|<=|==|>|<|~=)\s*([^,\s]+)', specifier)
-    return all(_compare_versions(installed, version, '>=' if operator == '~=' else operator) for operator, version in comparisons)
+    return all(
+        _compare_versions(installed, version, '>=' if operator == '~=' else operator)
+        for operator, version in comparisons
+    )
 
 
 def _compare_versions(installed: str, expected: str, operator: str) -> bool:
@@ -265,7 +277,7 @@ def _compare_versions(installed: str, expected: str, operator: str) -> bool:
     if operator == '<=':
         return left <= right
     if operator == '==':
-        return left == right
+        return left == right or installed.split('+', 1)[0] == expected.split('+', 1)[0]
     if operator == '>':
         return left > right
     if operator == '<':
@@ -283,12 +295,13 @@ def _import_candidates(distribution_name: str) -> list[str]:
     override = _IMPORT_NAME_OVERRIDES.get(distribution_name.lower())
     if override:
         candidates.append(override)
+    top_level = ''
     try:
         distribution = importlib_metadata.distribution(distribution_name)
         top_level = distribution.read_text('top_level.txt') or ''
-        candidates.extend(line.strip() for line in top_level.splitlines() if line.strip())
     except Exception:
-        pass
+        top_level = ''
+    candidates.extend(line.strip() for line in top_level.splitlines() if line.strip())
     candidates.append(distribution_name.replace('-', '_'))
     unique: list[str] = []
     for candidate in candidates:
@@ -303,7 +316,12 @@ def _check_python(report: SanityReport, cfg: Any) -> None:
         report.add('requirements.pyproject', False, requirements.warning, warning=True)
     requires_python = requirements.requires_python
     if not requires_python:
-        report.add('python.version', False, 'requires-python is not declared in pyproject.toml; version check skipped', warning=True)
+        report.add(
+            'python.version',
+            False,
+            'requires-python is not declared in pyproject.toml; version check skipped',
+            warning=True,
+        )
         return
     report.add(
         'python.version',
@@ -317,7 +335,9 @@ def _check_packages(report: SanityReport, cfg: Any) -> None:
     recommend_mode = _torch_install_recommend_mode(cfg)
     for raw in requirements.dependencies:
         requirement = _parse_requirement(raw)
-        _check_requirement(report, raw, warning=recommend_mode and requirement.name in {'torch', 'torchvision', 'torchaudio'})
+        _check_requirement(
+            report, raw, warning=recommend_mode and requirement.name in {'torch', 'torchvision', 'torchaudio'}
+        )
     for raw in sorted(set(requirements.optional_dependencies)):
         _check_requirement(report, raw, warning=True)
 
@@ -487,7 +507,9 @@ def _check_wandb_runtime(report: SanityReport, cfg: Any) -> None:
     report.add(
         'runtime.wandb.api_key',
         key_source is not None,
-        f'found credentials in {key_source}' if key_source else 'not found; run `uv run wandb login` or set WANDB_API_KEY',
+        f'found credentials in {key_source}'
+        if key_source
+        else 'not found; run `uv run wandb login` or set WANDB_API_KEY',
         warning=warning,
         always_show=True,
     )
@@ -521,6 +543,7 @@ def _check_runtime(report: SanityReport, cfg: Any) -> None:
 
     try:
         import torch.distributed as dist
+
         report.add('runtime.distributed_import', dist.is_available())
     except ModuleNotFoundError as exc:
         report.add('runtime.distributed_import', False, str(exc), warning=not cuda_requested)
@@ -534,14 +557,20 @@ def _should_check_cuda_driver(cfg: Any, cuda_requested: bool, diagnostics: Any) 
         return bool(cfg_get(cfg, 'sanity.torch_install.recommend', False))
     if mode in {'1', 'true', 'yes', 'on', 'always'}:
         return True
-    return cuda_requested or diagnostics.torch_cuda is not None or bool(cfg_get(cfg, 'sanity.torch_install.recommend', False))
+    return (
+        cuda_requested
+        or diagnostics.torch_cuda is not None
+        or bool(cfg_get(cfg, 'sanity.torch_install.recommend', False))
+    )
 
 
 def _check_cuda_runtime(report: SanityReport, cfg: Any, cuda_requested: bool, diagnostics: Any) -> None:
     warn_if_unusable = not cuda_requested and not bool(cfg_get(cfg, 'sanity.cuda.fail_on_cpu_mismatch', False))
     torch_version = diagnostics.torch_version or 'not installed'
     torch_cuda = 'unavailable' if diagnostics.torch_version is None else diagnostics.torch_cuda or 'cpu-only'
-    torch_build_ok = diagnostics.torch_cuda is not None or (not cuda_requested and diagnostics.torch_version is not None)
+    torch_build_ok = diagnostics.torch_cuda is not None or (
+        not cuda_requested and diagnostics.torch_version is not None
+    )
     report.add(
         'runtime.cuda.torch_build',
         torch_build_ok,
@@ -641,13 +670,21 @@ def _check_output_dirs(report: SanityReport, cfg: Any) -> None:
 def _check_disk(report: SanityReport, cfg: Any) -> None:
     min_gb = float(cfg_get(cfg, 'sanity.min_disk_gb', 1.0))
     free_gb = shutil.disk_usage('.').free / (1024**3)
-    report.add('disk.free_space', free_gb >= min_gb, f'{free_gb:.1f}GB free; need {min_gb:.1f}GB', warning=free_gb < min_gb)
+    report.add(
+        'disk.free_space', free_gb >= min_gb, f'{free_gb:.1f}GB free; need {min_gb:.1f}GB', warning=free_gb < min_gb
+    )
 
 
 def _check_registries(report: SanityReport, cfg: Any) -> None:
     try:
         bootstrap_registries()
-        from src.utils.registry import DATASET_REGISTRY, MODEL_REGISTRY, OPTIMIZER_REGISTRY, SCHEDULER_REGISTRY, TASK_REGISTRY
+        from src.utils.registry import (
+            DATASET_REGISTRY,
+            MODEL_REGISTRY,
+            OPTIMIZER_REGISTRY,
+            SCHEDULER_REGISTRY,
+            TASK_REGISTRY,
+        )
     except Exception as exc:
         report.add('registry.bootstrap', False, str(exc), warning=_torch_missing_in_recommend_mode(cfg, exc))
         return
@@ -678,6 +715,7 @@ def _check_data_model_smoke(report: SanityReport, cfg: Any) -> None:
         return
     try:
         import torch
+
         from src.data import build_dataloaders
         from src.engine.evaluator import move_to_device
         from src.optim import build_optimizer, build_scheduler
@@ -698,7 +736,9 @@ def _check_data_model_smoke(report: SanityReport, cfg: Any) -> None:
         report.add('smoke.forward_loss', finite_loss, 'loss missing or non-finite')
         if result.loss is not None:
             result.loss.backward()
-        grad_ok = any(p.grad is not None and torch.isfinite(p.grad).all().item() for p in model.parameters() if p.requires_grad)
+        grad_ok = any(
+            p.grad is not None and torch.isfinite(p.grad).all().item() for p in model.parameters() if p.requires_grad
+        )
         report.add('smoke.backward_gradients', grad_ok, 'no finite gradients found')
         optimizer = build_optimizer(model, cfg)
         scheduler = build_scheduler(cfg, optimizer, steps_per_epoch=max(1, len(loaders['train'])))
@@ -713,6 +753,7 @@ def _check_experiment_composition(report: SanityReport, cfg: Any) -> None:
     try:
         from hydra import compose, initialize_config_dir
         from hydra.core.global_hydra import GlobalHydra
+
         from src.utils.paths import CONFIG_DIR
 
         experiment_dir = Path(CONFIG_DIR / 'experiment')
@@ -725,13 +766,15 @@ def _check_experiment_composition(report: SanityReport, cfg: Any) -> None:
                 try:
                     compose(config_name='config', overrides=[f'+experiment={experiment}'])
                     report.add(f'experiment.{experiment}', True)
-                except Exception as exc:
+                except Exception as exc:  # noqa: PERF203 - each experiment must fail independently.
                     report.add(f'experiment.{experiment}', False, str(exc))
     except Exception as exc:
         report.add('experiment.compose_all', False, str(exc), warning=True)
 
 
-def run_sanity_checks(cfg: Any, strict: bool = True, extra_checks: list[Callable[[SanityReport, Any], None]] | None = None) -> SanityReport:
+def run_sanity_checks(
+    cfg: Any, strict: bool = True, extra_checks: list[Callable[[SanityReport, Any], None]] | None = None
+) -> SanityReport:
     """Run the canonical pre-flight sanity checks.
 
     Args:
@@ -741,8 +784,10 @@ def run_sanity_checks(cfg: Any, strict: bool = True, extra_checks: list[Callable
 
     Returns:
         SanityReport with every check result.
-    """
 
+    Raises:
+        RuntimeError: If strict mode is enabled and a required check fails.
+    """
     report = SanityReport()
     checks: list[Callable[[SanityReport, Any], None]] = [
         _check_python,

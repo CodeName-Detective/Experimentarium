@@ -12,18 +12,23 @@ Typical usage:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
 from src.runtime.distributed import mean_dict
-from src.tasks import BaseTask
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from src.tasks import BaseTask
+
+Batch = dict[str, Any]
 
 
-def move_to_device(batch: dict[str, Any], device: torch.device | str) -> dict[str, Any]:
+def move_to_device(batch: Batch, device: torch.device | str) -> Batch:
     """Move a flat tensor batch dictionary to a device."""
-
-    moved: dict[str, Any] = {}
+    moved: Batch = {}
     for key, value in batch.items():
         moved[key] = value.to(device, non_blocking=True) if torch.is_tensor(value) else value
     return moved
@@ -38,7 +43,8 @@ class Evaluator:
         self.device = torch.device(device)
 
     @torch.no_grad()
-    def evaluate(self, loader, prefix: str = 'val') -> dict[str, float]:
+    def evaluate(self, loader: Iterable[Batch], prefix: str = 'val') -> dict[str, float]:
+        """Evaluate a loader and return prefixed aggregate metrics."""
         self.model.eval()
         self.task.reset_metrics()
         total_loss = 0.0
@@ -57,7 +63,8 @@ class Evaluator:
         return {f'{prefix}/{key}': value for key, value in metrics.items()}
 
     @torch.no_grad()
-    def predict(self, loader, limit: int | None = None) -> list[dict[str, Any]]:
+    def predict(self, loader: Iterable[Batch], limit: int | None = None) -> list[dict[str, Any]]:
+        """Generate serializable prediction records from a loader."""
         self.model.eval()
         records: list[dict[str, Any]] = []
         for batch in loader:

@@ -24,37 +24,43 @@ except Exception:  # pragma: no cover - torch missing or without distributed sup
 
 
 def is_available() -> bool:
+    """Return whether torch.distributed is available."""
     return dist is not None and dist.is_available()
 
 
 def is_initialized() -> bool:
+    """Return whether a distributed process group is initialized."""
     return is_available() and dist.is_initialized()
 
 
 def world_size() -> int:
+    """Return the distributed world size or one outside DDP."""
     return dist.get_world_size() if is_initialized() else 1
 
 
 def rank() -> int:
+    """Return the global process rank."""
     return dist.get_rank() if is_initialized() else int(os.environ.get('RANK', '0'))
 
 
 def local_rank() -> int:
+    """Return the node-local process rank."""
     return int(os.environ.get('LOCAL_RANK', '0'))
 
 
 def is_rank0() -> bool:
+    """Return whether the current process is rank zero."""
     return rank() == 0
 
 
 def barrier() -> None:
+    """Synchronize initialized distributed processes."""
     if is_initialized():
         dist.barrier()
 
 
 def broadcast_object(value: Any, src: int = 0) -> Any:
     """Broadcast a small Python object from one rank to every rank."""
-
     if not is_initialized():
         return value
     values = [value if rank() == src else None]
@@ -64,7 +70,6 @@ def broadcast_object(value: Any, src: int = 0) -> Any:
 
 def setup_from_env(backend: str = 'nccl') -> bool:
     """Initialize DDP from torchrun environment variables when available."""
-
     if is_initialized() or 'RANK' not in os.environ:
         return is_initialized()
     try:
@@ -73,20 +78,23 @@ def setup_from_env(backend: str = 'nccl') -> bool:
         raise RuntimeError('torch is required for distributed setup') from exc
     if dist is None or not dist.is_available():
         raise RuntimeError('torch.distributed is not available')
+    backend = backend.lower()
     if not torch.cuda.is_available() and backend == 'nccl':
         backend = 'gloo'
     dist.init_process_group(backend=backend)
-    if torch.cuda.is_available():
+    if backend == 'nccl':
         torch.cuda.set_device(local_rank())
     return True
 
 
 def cleanup() -> None:
+    """Destroy the active distributed process group."""
     if is_initialized():
         dist.destroy_process_group()
 
 
 def mean_scalar(value: float, device: Any = 'cpu') -> float:
+    """Average a scalar value across distributed ranks."""
     if not is_initialized():
         return float(value)
     try:
@@ -101,7 +109,6 @@ def mean_scalar(value: float, device: Any = 'cpu') -> float:
 
 def mean_dict(metrics: dict[str, Any], device: Any = 'cpu') -> dict[str, float]:
     """Average numeric metric values across distributed ranks."""
-
     if not is_initialized():
         return {key: float(value) for key, value in metrics.items()}
     return {key: mean_scalar(float(value), device=device) for key, value in metrics.items()}

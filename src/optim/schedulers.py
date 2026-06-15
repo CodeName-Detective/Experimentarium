@@ -25,8 +25,8 @@ Typical usage:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from torch.optim import Optimizer
 from torch.optim.lr_scheduler import (
     ConstantLR,
     CosineAnnealingLR,
@@ -43,6 +43,12 @@ from torch.optim.lr_scheduler import (
 
 from src.utils.config import cfg_get
 from src.utils.registry import SCHEDULER_REGISTRY, register_scheduler
+
+if TYPE_CHECKING:
+    from torch.optim import Optimizer
+    from torch.optim.lr_scheduler import LRScheduler
+
+    from src.utils.types import ConfigType
 
 SCHEDULER_DESCRIPTIONS = {
     'none': 'Leaves learning rate unchanged; useful for debugging and tiny sanity runs.',
@@ -61,7 +67,9 @@ SCHEDULER_DESCRIPTIONS = {
 
 @dataclass
 class SchedulerBundle:
-    scheduler: object | None
+    """Scheduler instance plus the metadata required to step it correctly."""
+
+    scheduler: LRScheduler | ReduceLROnPlateau | None
     interval: str = 'epoch'
     monitor: str = 'val/loss'
     name: str = 'none'
@@ -69,49 +77,129 @@ class SchedulerBundle:
 
 
 @register_scheduler('none')
-def build_none(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
-    return None
+def build_none(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> None:
+    """Disable learning-rate scheduling."""
+    return
 
 
 @register_scheduler('constant')
-def build_constant(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
-    return ConstantLR(optimizer, factor=float(cfg_get(cfg, 'factor', 1.0)), total_iters=int(cfg_get(cfg, 'total_iters', 1)))
+def build_constant(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> ConstantLR:
+    """Build a constant-factor scheduler."""
+    return ConstantLR(
+        optimizer,
+        factor=float(cfg_get(cfg, 'factor', 1.0)),
+        total_iters=int(cfg_get(cfg, 'total_iters', 1)),
+    )
 
 
 @register_scheduler('linear')
-def build_linear(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
-    return LinearLR(optimizer, start_factor=float(cfg_get(cfg, 'start_factor', 0.1)), end_factor=float(cfg_get(cfg, 'end_factor', 1.0)), total_iters=int(cfg_get(cfg, 'total_iters', 5)))
+def build_linear(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> LinearLR:
+    """Build a linear learning-rate scheduler."""
+    return LinearLR(
+        optimizer,
+        start_factor=float(cfg_get(cfg, 'start_factor', 0.1)),
+        end_factor=float(cfg_get(cfg, 'end_factor', 1.0)),
+        total_iters=int(cfg_get(cfg, 'total_iters', 5)),
+    )
 
 
 @register_scheduler('step')
-def build_step(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
-    return StepLR(optimizer, step_size=int(cfg_get(cfg, 'step_size', 10)), gamma=float(cfg_get(cfg, 'gamma', 0.1)))
+def build_step(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> StepLR:
+    """Build a fixed-step decay scheduler."""
+    return StepLR(
+        optimizer,
+        step_size=int(cfg_get(cfg, 'step_size', 10)),
+        gamma=float(cfg_get(cfg, 'gamma', 0.1)),
+    )
 
 
 @register_scheduler('multistep')
-def build_multistep(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
-    return MultiStepLR(optimizer, milestones=list(cfg_get(cfg, 'milestones', [30, 60, 90])), gamma=float(cfg_get(cfg, 'gamma', 0.1)))
+def build_multistep(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> MultiStepLR:
+    """Build a milestone-based decay scheduler."""
+    return MultiStepLR(
+        optimizer,
+        milestones=list(cfg_get(cfg, 'milestones', [30, 60, 90])),
+        gamma=float(cfg_get(cfg, 'gamma', 0.1)),
+    )
 
 
 @register_scheduler('exponential')
-def build_exponential(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
+def build_exponential(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> ExponentialLR:
+    """Build an exponential decay scheduler."""
     return ExponentialLR(optimizer, gamma=float(cfg_get(cfg, 'gamma', 0.95)))
 
 
 @register_scheduler('cosine')
-def build_cosine(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
+def build_cosine(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> CosineAnnealingLR:
+    """Build a cosine annealing scheduler."""
     interval = cfg_get(cfg, 'interval', 'epoch')
     t_max = total_steps if interval == 'step' else total_epochs
-    return CosineAnnealingLR(optimizer, T_max=max(1, int(t_max)), eta_min=float(cfg_get(cfg, 'eta_min', 0.0)))
+    return CosineAnnealingLR(
+        optimizer,
+        T_max=max(1, int(t_max)),
+        eta_min=float(cfg_get(cfg, 'eta_min', 0.0)),
+    )
 
 
 @register_scheduler('cosine_restart')
-def build_cosine_restart(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
-    return CosineAnnealingWarmRestarts(optimizer, T_0=int(cfg_get(cfg, 'T_0', 10)), T_mult=int(cfg_get(cfg, 'T_mult', 2)), eta_min=float(cfg_get(cfg, 'eta_min', 0.0)))
+def build_cosine_restart(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> CosineAnnealingWarmRestarts:
+    """Build a cosine scheduler with warm restarts."""
+    return CosineAnnealingWarmRestarts(
+        optimizer,
+        T_0=int(cfg_get(cfg, 'T_0', 10)),
+        T_mult=int(cfg_get(cfg, 'T_mult', 2)),
+        eta_min=float(cfg_get(cfg, 'eta_min', 0.0)),
+    )
 
 
 @register_scheduler('plateau')
-def build_plateau(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
+def build_plateau(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> ReduceLROnPlateau:
+    """Build a metric-driven plateau scheduler."""
     return ReduceLROnPlateau(
         optimizer,
         mode=str(cfg_get(cfg, 'mode', 'min')),
@@ -123,14 +211,30 @@ def build_plateau(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int
 
 
 @register_scheduler('polynomial')
-def build_polynomial(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
+def build_polynomial(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> PolynomialLR:
+    """Build a polynomial decay scheduler."""
     interval = cfg_get(cfg, 'interval', 'epoch')
     total_iters = total_steps if interval == 'step' else total_epochs
-    return PolynomialLR(optimizer, total_iters=max(1, int(total_iters)), power=float(cfg_get(cfg, 'power', 1.0)))
+    return PolynomialLR(
+        optimizer,
+        total_iters=max(1, int(total_iters)),
+        power=float(cfg_get(cfg, 'power', 1.0)),
+    )
 
 
 @register_scheduler('onecycle')
-def build_onecycle(optimizer: Optimizer, cfg, total_steps: int, total_epochs: int):
+def build_onecycle(
+    optimizer: Optimizer,
+    cfg: ConfigType,
+    total_steps: int,
+    total_epochs: int,
+) -> OneCycleLR:
+    """Build a one-cycle scheduler."""
     max_lr = cfg_get(cfg, 'max_lr', None)
     if max_lr is None:
         max_lr = max(group.get('lr', 1e-3) for group in optimizer.param_groups)
@@ -143,16 +247,31 @@ def build_onecycle(optimizer: Optimizer, cfg, total_steps: int, total_epochs: in
     )
 
 
-def _with_warmup(optimizer: Optimizer, scheduler, cfg, total_steps: int):
+def _with_warmup(
+    optimizer: Optimizer,
+    scheduler: LRScheduler | ReduceLROnPlateau | None,
+    cfg: ConfigType,
+    total_steps: int,
+) -> LRScheduler | ReduceLROnPlateau | None:
+    """Prepend a linear warmup schedule when configured."""
     warmup = cfg_get(cfg, 'warmup', {})
     if scheduler is None or not bool(cfg_get(warmup, 'enabled', False)):
         return scheduler
     warmup_steps = int(cfg_get(warmup, 'steps', 100))
-    warmup_scheduler = LinearLR(optimizer, start_factor=float(cfg_get(warmup, 'start_factor', 1e-4)), total_iters=warmup_steps)
-    return SequentialLR(optimizer, schedulers=[warmup_scheduler, scheduler], milestones=[warmup_steps])
+    warmup_scheduler = LinearLR(
+        optimizer,
+        start_factor=float(cfg_get(warmup, 'start_factor', 1e-4)),
+        total_iters=warmup_steps,
+    )
+    return SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, scheduler],
+        milestones=[warmup_steps],
+    )
 
 
-def build_scheduler(cfg, optimizer: Optimizer, steps_per_epoch: int) -> SchedulerBundle:
+def build_scheduler(cfg: ConfigType, optimizer: Optimizer, steps_per_epoch: int) -> SchedulerBundle:
+    """Build a scheduler bundle from the experiment configuration."""
     scheduler_cfg = cfg_get(cfg, 'scheduler', cfg)
     name = str(cfg_get(scheduler_cfg, 'name', 'none'))
     interval = str(cfg_get(scheduler_cfg, 'interval', 'epoch'))
@@ -173,6 +292,7 @@ def build_scheduler(cfg, optimizer: Optimizer, steps_per_epoch: int) -> Schedule
 
 
 def scheduler_step(bundle: SchedulerBundle, metric: float | None = None) -> None:
+    """Advance a scheduler using its configured stepping semantics."""
     scheduler = bundle.scheduler
     if scheduler is None:
         return

@@ -12,11 +12,13 @@ Typical usage:
 from __future__ import annotations
 
 import math
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn as nn
 
-from src.utils.types import FloatTensor
+if TYPE_CHECKING:
+    from src.utils.types import FloatTensor
 
 
 class MultiHeadAttention(nn.Module):
@@ -33,6 +35,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: FloatTensor, mask: FloatTensor | None = None) -> FloatTensor:
+        """Apply multi-head self-attention to a sequence tensor."""
         batch_size, tokens, channels = x.shape
         qkv = self.qkv(x).reshape(batch_size, tokens, 3, self.num_heads, self.d_k).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)
@@ -57,6 +60,7 @@ class FeedForward(nn.Module):
         )
 
     def forward(self, x: FloatTensor) -> FloatTensor:
+        """Apply the feed-forward network to a tensor."""
         return self.net(x)
 
 
@@ -74,4 +78,5 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x: FloatTensor) -> FloatTensor:
+        """Add positional encodings to an embedded sequence."""
         return self.dropout(x + self.pe[:, : x.size(1)])

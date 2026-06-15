@@ -72,8 +72,10 @@ def prepare_run(cfg: Any) -> RunInfo:
     a warning instead of selecting ``run_2``, ``run_3``, and so on. Evaluation
     from a checkpoint under ``runs/<run_id>/checkpoints`` writes to
     ``runs/<run_id>_evaluation`` so evaluation artifacts are grouped separately.
-    """
 
+    Returns:
+        Resolved run identity and artifact paths.
+    """
     raw_config = config_to_dict(cfg)
     config_id = _config_hash(raw_config)
     output_dir = Path(str(cfg_get(cfg, 'run.output_dir', 'outputs')))

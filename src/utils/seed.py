@@ -11,6 +11,7 @@ Typical usage:
 
 import os
 import random
+
 import numpy as np
 import torch
 
@@ -24,15 +25,16 @@ except Exception:
 # DISTRIBUTED HELPERS
 # =========================================================
 
+
 def get_rank() -> int:
-    """Returns current process rank (DDP/FSDP safe)."""
+    """Return the current process rank."""
     if dist is not None and dist.is_available() and dist.is_initialized():
         return dist.get_rank()
     return 0
 
 
 def get_world_size() -> int:
-    """Returns total number of distributed processes."""
+    """Return the total number of distributed processes."""
     if dist is not None and dist.is_available() and dist.is_initialized():
         return dist.get_world_size()
     return 1
@@ -42,37 +44,29 @@ def get_world_size() -> int:
 # ENVIRONMENT CHECK
 # =========================================================
 
+
 def check_environment(require_cuda: bool = False) -> None:
-    """Basic runtime sanity checks."""
-
-    import sys
-
-    if sys.version_info < (3, 9):
-        raise RuntimeError(f"Python >= 3.9 required, found {sys.version}")
-
+    """Validate requested runtime capabilities."""
     if require_cuda and not torch.cuda.is_available():
-        print("[WARN] CUDA requested but not available; falling back must be handled by the caller.")
+        print('[WARN] CUDA requested but not available; falling back must be handled by the caller.')
 
 
 # =========================================================
 # SEEDING (DDP SAFE)
 # =========================================================
 
+
 def set_seed(seed: int, add_rank_offset: bool = True, seed_cuda: bool = False) -> None:
-    """
-    Sets seeds across all randomness sources.
+    """Set seeds across all randomness sources.
 
     Args:
-        seed: base seed
-        add_rank_offset: ensures different RNG streams per rank
+        seed: Base random seed.
+        add_rank_offset: Whether to create a distinct RNG stream for each rank.
+        seed_cuda: Whether to seed CUDA random-number generators when available.
     """
-
     rank = get_rank()
-
     final_seed = seed + rank if add_rank_offset else seed
-
-    os.environ["PYTHONHASHSEED"] = str(final_seed)
-
+    os.environ['PYTHONHASHSEED'] = str(final_seed)
     random.seed(final_seed)
     np.random.seed(final_seed)
     torch.manual_seed(final_seed)
@@ -86,18 +80,11 @@ def set_seed(seed: int, add_rank_offset: bool = True, seed_cuda: bool = False) -
 # DETERMINISTIC BACKEND
 # =========================================================
 
+
 def set_deterministic_mode(strict: bool = False) -> None:
-    """
-    Forces deterministic execution (best effort).
-
-    Args:
-        strict: if True, raises errors for nondeterministic ops
-    """
-
+    """Force deterministic execution on a best-effort basis."""
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-
-    # Improve determinism in matmul / conv paths
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
 
@@ -109,83 +96,28 @@ def set_deterministic_mode(strict: bool = False) -> None:
 # DATALOADER WORKER SEED
 # =========================================================
 
+
 def seed_worker(worker_id: int) -> None:
-    """
-    Ensures deterministic DataLoader workers in DDP/FSDP.
-    """
-
+    """Seed a DataLoader worker deterministically."""
     worker_seed = torch.initial_seed() % 2**32 + get_rank()
-
     random.seed(worker_seed)
     np.random.seed(worker_seed)
 
 
-def get_generator(seed: int):
-    """
-    Returns a seeded torch Generator for DataLoader shuffle.
-    """
-    g = torch.Generator()
-    g.manual_seed(seed + get_rank())
-    return g
+def get_generator(seed: int) -> torch.Generator:
+    """Return a seeded generator for DataLoader shuffling."""
+    generator = torch.Generator()
+    generator.manual_seed(seed + get_rank())
+    return generator
 
 
 # =========================================================
 # MAIN ENTRYPOINT
 # =========================================================
 
+
 def setup_reproducibility(seed: int, strict: bool = False, require_cuda: bool = False) -> None:
-    """
-    Call once per process AFTER init_process_group().
-
-    Works for:
-        - single GPU
-        - DDP
-        - FSDP
-    """
-
+    """Configure process-local seeding and deterministic execution."""
     check_environment(require_cuda=require_cuda)
     set_seed(seed, add_rank_offset=True, seed_cuda=require_cuda)
     set_deterministic_mode(strict=strict)
-
-
-# =========================================================
-# USAGE EXAMPLE
-# =========================================================
-
-"""
-USAGE:
-
-1. Initialize distributed first:
-    torch.distributed.init_process_group(...)
-
-2. Then call:
-    setup_reproducibility(seed=42)
-
-3. DataLoader:
-    loader = DataLoader(
-        dataset,
-        shuffle=True,
-        num_workers=4,
-        worker_init_fn=seed_worker,
-        generator=get_generator(42)
-    )
-
-------------------------------------------------------------
-
-RECOMMENDED ORDER:
-
-init_process_group()
-setup_reproducibility()
-build_dataloader()
-build_model()
-train()
-
-------------------------------------------------------------
-
-STRICT MODE:
-
-setup_reproducibility(seed=42, strict=True)
-
-- forces deterministic ops
-- may throw errors if unsupported ops exist
-"""

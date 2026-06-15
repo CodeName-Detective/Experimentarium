@@ -17,32 +17,35 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import hydra
-from omegaconf import DictConfig
+
+if TYPE_CHECKING:
+    from omegaconf import DictConfig
 
 from src.data import build_dataloaders
 from src.engine import Evaluator, Trainer
 from src.optim import build_optimizer, build_scheduler
-from src.runtime.distributed import cleanup as cleanup_distributed
-from src.runtime.distributed import setup_from_env
+from src.runtime.distributed import cleanup as cleanup_distributed, setup_from_env
 from src.tasks import build_task
 from src.utils.checkpoint import CheckpointManager
 from src.utils.config import cfg_get
 from src.utils.logger import build_loggers
 from src.utils.paths import make_output_dirs
-from src.utils.run import prepare_run
 from src.utils.registry import MODEL_REGISTRY
+from src.utils.run import prepare_run
 from src.utils.sanity import bootstrap_registries, run_sanity_checks
 from src.utils.seed import setup_reproducibility
 
 
 @hydra.main(config_path='../configs', config_name='config', version_base='1.3')
 def main(cfg: DictConfig) -> None:
+    """Run the configured training or evaluation workflow."""
     setup_from_env(str(cfg_get(cfg, 'run.distributed_backend', 'nccl')))
     run_info = prepare_run(cfg)
     setup_reproducibility(
@@ -56,9 +59,7 @@ def main(cfg: DictConfig) -> None:
     logger = logging.getLogger('ml_template')
     if run_info.warning:
         logger.warning('\033[1;33m%s\033[0m', run_info.warning)
-    logger.info(
-        'run_id=%s config_id=%s run_dir=%s', run_info.run_id, run_info.config_id, run_info.run_dir
-    )
+    logger.info('run_id=%s config_id=%s run_dir=%s', run_info.run_id, run_info.config_id, run_info.run_dir)
     mode = str(cfg_get(cfg, 'run.mode', 'train'))
     is_checkpoint_resume = bool(cfg_get(cfg, 'checkpoint.resume', None))
     try:

@@ -7,10 +7,13 @@ Use this module only for low-level CUDA checks. Most users should call
 from __future__ import annotations
 
 import re
-import subprocess
+import subprocess  # noqa: S404 - required to query nvidia-smi diagnostics.
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @dataclass(frozen=True)
@@ -43,14 +46,17 @@ class TorchWheelOption:
 
     @property
     def index_url(self) -> str:
+        """Return the official wheel index URL."""
         return f'https://download.pytorch.org/whl/{self.cuda_tag}'
 
     @property
     def cuda_version(self) -> str | None:
+        """Return the CUDA version encoded by the wheel tag."""
         return _cuda_tag_to_version(self.cuda_tag)
 
     @property
     def min_driver_version(self) -> str | None:
+        """Return the minimum NVIDIA driver for this wheel."""
         return minimum_nvidia_driver_for_cuda(self.cuda_version)
 
 
@@ -126,7 +132,6 @@ _MIN_NVIDIA_DRIVER_BY_CUDA = {
 
 def cuda_status() -> tuple[bool, str]:
     """Return whether CUDA is usable and a short diagnostic message."""
-
     diagnostics = collect_cuda_diagnostics()
     if not diagnostics.cuda_available:
         return False, diagnostics.compatibility_message or 'CUDA is not available to PyTorch'
@@ -138,7 +143,6 @@ def collect_cuda_diagnostics(
     runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> CudaDiagnostics:
     """Collect PyTorch CUDA, NVIDIA driver, and compatibility diagnostics."""
-
     torch_module, torch_error = _import_torch()
     smi_driver, smi_names, smi_error = _query_nvidia_smi(runner=runner)
     if torch_module is None:
@@ -205,7 +209,6 @@ def recommend_torch_install(
     numpy_spec: str = 'numpy>=1.24,<2.0',
 ) -> TorchInstallRecommendation:
     """Recommend a PyTorch wheel and UV/pip commands for this machine."""
-
     compatible = _compatible_wheel_options(diagnostics.nvidia_driver_version)
     if compatible:
         selected = compatible[0]
@@ -235,26 +238,22 @@ def recommend_torch_install(
 
 def format_torch_install_recommendation(recommendation: TorchInstallRecommendation) -> str:
     """Format a compact multi-line recommendation for sanity output."""
-
     option = recommendation.selected
     packages = _uv_package_specs(option)
-    return '\n'.join(
-        [
-            f'Python requirement from pyproject.toml: {recommendation.python_requirement}',
-            f'Recommended wheel index: {option.index_url}',
-            f'Recommended packages: {", ".join(packages)}',
-            f'Reason: {recommendation.reason}',
-            'UV commands:',
-            *[f'  {command}' for command in recommendation.uv_commands],
-            'pip commands:',
-            *[f'  {command}' for command in recommendation.pip_commands],
-        ]
-    )
+    return '\n'.join([
+        f'Python requirement from pyproject.toml: {recommendation.python_requirement}',
+        f'Recommended wheel index: {option.index_url}',
+        f'Recommended packages: {", ".join(packages)}',
+        f'Reason: {recommendation.reason}',
+        'UV commands:',
+        *[f'  {command}' for command in recommendation.uv_commands],
+        'pip commands:',
+        *[f'  {command}' for command in recommendation.pip_commands],
+    ])
 
 
 def minimum_nvidia_driver_for_cuda(cuda_version: str | None) -> str | None:
     """Return the known minimum NVIDIA Linux driver for a CUDA toolkit version."""
-
     if not cuda_version:
         return None
     parts = cuda_version.split('.')
@@ -375,9 +374,8 @@ def _version_at_least(installed: str, required: str) -> bool:
 
 def _version_tuple(value: str) -> tuple[int, int, int]:
     parts = [int(part) for part in value.replace('-', '.').split('.') if part.isdigit()]
-    padded = (parts + [0, 0, 0])[:3]
+    padded = [*parts, 0, 0, 0][:3]
     return padded[0], padded[1], padded[2]
-
 
 
 def _compatible_wheel_options(driver_version: str | None) -> list[TorchWheelOption]:
@@ -388,7 +386,9 @@ def _compatible_wheel_options(driver_version: str | None) -> list[TorchWheelOpti
         for option in _PYTORCH_WHEEL_OPTIONS
         if option.min_driver_version is not None and _version_at_least(driver_version, option.min_driver_version)
     ]
-    return sorted(options, key=lambda option: (_cuda_sort_key(option.cuda_tag), _version_tuple(option.torch)), reverse=True)
+    return sorted(
+        options, key=lambda option: (_cuda_sort_key(option.cuda_tag), _version_tuple(option.torch)), reverse=True
+    )
 
 
 def _uv_commands(option: TorchWheelOption, python_for_uv: str, numpy_spec: str) -> tuple[str, ...]:
@@ -431,16 +431,14 @@ def _pip_package_specs(option: TorchWheelOption) -> tuple[str, str, str]:
 def _pyproject_snippet(option: TorchWheelOption, numpy_spec: str) -> str:
     specs = _uv_package_specs(option)
     dependencies = '\n'.join(f'    "{spec}",' for spec in (numpy_spec, *specs))
-    return '\n'.join(
-        [
-            'dependencies = [',
-            dependencies,
-            ']',
-            '',
-            '[[tool.uv.index]]',
-            f'url = "{option.index_url}"',
-        ]
-    )
+    return '\n'.join([
+        'dependencies = [',
+        dependencies,
+        ']',
+        '',
+        '[[tool.uv.index]]',
+        f'url = "{option.index_url}"',
+    ])
 
 
 def _python_for_uv(python_requirement: str) -> str:

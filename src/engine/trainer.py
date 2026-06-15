@@ -21,17 +21,20 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
 
 from src.callbacks import Callback, CallbackList
 from src.engine.evaluator import Evaluator, move_to_device
 from src.optim.schedulers import SchedulerBundle, scheduler_step
-from src.tasks import BaseTask
 from src.utils.checkpoint import CheckpointManager, get_rng_state
 from src.utils.config import cfg_get, config_to_dict
-from src.utils.logger import LoggerCollection
+
+if TYPE_CHECKING:
+    from src.tasks import BaseTask
+    from src.utils.logger import LoggerCollection
+    from src.utils.types import ConfigType
 
 _LOG = logging.getLogger('ml_template')
 
@@ -41,7 +44,7 @@ class Trainer:
 
     def __init__(
         self,
-        cfg,
+        cfg: ConfigType,
         model: torch.nn.Module,
         task: BaseTask,
         loaders: dict[str, Any],
@@ -69,7 +72,9 @@ class Trainer:
         self.grad_clip = cfg_get(cfg, 'trainer.grad_clip', None)
         self.log_every_n_steps = max(1, int(cfg_get(cfg, 'trainer.log_every_n_steps', 50)))
         self.val_every_n_epochs = max(1, int(cfg_get(cfg, 'trainer.val_every_n_epochs', 1)))
-        self.early_patience = int(cfg_get(cfg, 'trainer.early_stopping.patience', cfg_get(cfg, 'trainer.early_stopping_patience', 0)))
+        self.early_patience = int(
+            cfg_get(cfg, 'trainer.early_stopping.patience', cfg_get(cfg, 'trainer.early_stopping_patience', 0))
+        )
         self.check_finite_loss = bool(cfg_get(cfg, 'trainer.check_finite_loss', True))
         self.detect_anomaly = bool(cfg_get(cfg, 'trainer.detect_anomaly', False))
         self.save_on_exception = bool(cfg_get(cfg, 'checkpoint.save_on_exception', True))
@@ -87,7 +92,6 @@ class Trainer:
 
     def fit(self) -> dict[str, float]:
         """Run training and return final train/validation metrics."""
-
         final_metrics: dict[str, float] = {}
         training_started = False
         self.trained_epochs = 0
@@ -127,7 +131,6 @@ class Trainer:
 
     def train_epoch(self, epoch: int) -> dict[str, float]:
         """Run one training epoch and return prefixed metrics."""
-
         self.model.train()
         self.task.reset_metrics()
         total_loss = 0.0
@@ -141,7 +144,9 @@ class Trainer:
                 if result.loss is None:
                     raise RuntimeError('Task returned no loss during training')
                 if self.check_finite_loss and not torch.isfinite(result.loss.detach()).all().item():
-                    raise FloatingPointError(f'Non-finite training loss at epoch={epoch} batch={batch_idx}: {result.loss.detach().cpu()}')
+                    raise FloatingPointError(
+                        f'Non-finite training loss at epoch={epoch} batch={batch_idx}: {result.loss.detach().cpu()}'
+                    )
                 loss = result.loss / self.accumulate_grad_batches
             self.scaler.scale(loss).backward()
             should_step = batch_idx % self.accumulate_grad_batches == 0 or batch_idx == num_batches
@@ -168,13 +173,11 @@ class Trainer:
 
     def test(self) -> dict[str, float]:
         """Run test evaluation with the current model state."""
-
         evaluator = Evaluator(self.model, self.task, self.device)
         return evaluator.evaluate(self.loaders['test'], prefix='test')
 
     def resume(self) -> None:
         """Resume from ``checkpoint.resume`` when configured."""
-
         resume = cfg_get(self.cfg, 'checkpoint.resume', None)
         if not resume:
             return
@@ -184,7 +187,9 @@ class Trainer:
                 return
         else:
             resume_path = self.checkpoints.resolve_resume_path(resume)
-            state = self.checkpoints.load(resume_path, self.model, self.optimizer, self.scheduler.scheduler, self.scaler)
+            state = self.checkpoints.load(
+                resume_path, self.model, self.optimizer, self.scheduler.scheduler, self.scaler
+            )
         self.start_epoch = int(state.get('epoch', 0)) + 1
         self.current_epoch = int(state.get('epoch', 0))
         self.global_step = int(state.get('global_step', 0))
@@ -216,7 +221,9 @@ class Trainer:
 
     def _save_checkpoint(self, epoch: int, is_best: bool, metrics: dict[str, float]) -> None:
         monitor_value = metrics.get(self.monitor)
-        path = self.checkpoints.save(self._state_dict(epoch, metrics), epoch=epoch, metric=monitor_value, is_best=is_best)
+        path = self.checkpoints.save(
+            self._state_dict(epoch, metrics), epoch=epoch, metric=monitor_value, is_best=is_best
+        )
         if path is not None:
             self.callbacks.call('on_checkpoint_saved', self, path)
             if is_best:
@@ -252,5 +259,4 @@ class Trainer:
 
     def run(self) -> None:
         """Backward-compatible alias for older code paths."""
-
         self.fit()

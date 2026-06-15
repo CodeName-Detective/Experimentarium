@@ -9,11 +9,15 @@ from __future__ import annotations
 import importlib
 
 
+def _package_available(package: str) -> bool:
+    """Return whether a package can be imported."""
+    try:
+        importlib.import_module(package.replace('-', '_'))
+    except Exception:
+        return False
+    return True
+
+
 def missing_packages(packages: list[str]) -> list[str]:
-    missing: list[str] = []
-    for package in packages:
-        try:
-            importlib.import_module(package.replace('-', '_'))
-        except Exception:
-            missing.append(package)
-    return missing
+    """Return package names that cannot be imported."""
+    return [package for package in packages if not _package_available(package)]
