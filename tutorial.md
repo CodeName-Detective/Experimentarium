@@ -638,7 +638,7 @@ def build_inverse_sqrt(optimizer, cfg, total_steps: int, total_epochs: int):
 
     def lr_lambda(step: int) -> float:
         step = max(1, step)
-        return min(step ** -0.5, step * warmup_steps ** -1.5)
+        return min(step**-0.5, step * warmup_steps**-1.5)
 
     return LambdaLR(optimizer, lr_lambda=lr_lambda)
 ```
@@ -961,8 +961,7 @@ class MyLogger:
         if self.enabled:
             ...
 
-    def finish(self) -> None:
-        ...
+    def finish(self) -> None: ...
 ```
 
 Add it in `build_loggers(cfg)` when enabled. Then add config under `configs/logging/default.yaml`:

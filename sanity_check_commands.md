@@ -334,7 +334,7 @@ from src.utils.sanity import run_sanity_checks
 
 report = run_sanity_checks(cfg, strict=True)
 if not report.passed:
-    raise RuntimeError("sanity checks failed")
+    raise RuntimeError('sanity checks failed')
 ```
 
 You can also pass extra checks:
@@ -344,7 +344,7 @@ from src.utils.sanity import SanityReport, run_sanity_checks
 
 
 def check_my_dataset(report: SanityReport, cfg) -> None:
-    report.add("custom.dataset_contract", True, "dataset contract looks valid")
+    report.add('custom.dataset_contract', True, 'dataset contract looks valid')
 
 
 report = run_sanity_checks(cfg, strict=True, extra_checks=[check_my_dataset])

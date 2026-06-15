@@ -272,6 +272,7 @@ Add a model:
 import torch.nn as nn
 from src.utils.registry import register_model
 
+
 @register_model('my_model')
 class MyModel(nn.Module):
     def __init__(self, cfg):
@@ -294,10 +295,10 @@ Add a dataset:
 from torch.utils.data import Dataset
 from src.utils.registry import register_dataset
 
+
 @register_dataset('my_dataset')
 class MyDataset(Dataset):
-    def __init__(self, cfg, split='train'):
-        ...
+    def __init__(self, cfg, split='train'): ...
 
     def __getitem__(self, idx):
         return {'x': ..., 'label': ...}
