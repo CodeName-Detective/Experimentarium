@@ -157,7 +157,7 @@ flowchart TD
 
     Mode -->|train| ConfigFile["outputs/run_configs/<run_id>.yaml"]
     Mode -->|train| RunDir["outputs/runs/<run_id>/"]
-    Mode -->|eval| EvalDir["outputs/evaluations/<run_id>/"]
+    Mode -->|eval/test/predict| EvalDir["outputs/evaluations/<run_id>/"]
     EvalDir --> EvalConfig[config.yaml]
 
     RunDir --> Logs[logs/]
@@ -192,7 +192,7 @@ Key behavior:
 - Use `run.trial=2` or an explicit `run.id` when you want a different planned base id.
 - `checkpoint.resume=latest` keeps the base id so checkpoint lookup targets the existing training run directory.
 - Evaluation preserves that id while changing `run.run_dir` to `outputs/evaluations/<run.id>/`.
-- `outputs/run_registry.jsonl` records both training and evaluation configs, artifact directories, repeat commands, and command working directories.
+- `outputs/run_registry.jsonl` records train/profile/eval/test/predict configs, artifact directories, repeat commands, and command working directories.
 - `src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run` replays a saved resolved config after regenerating runtime artifact paths.
 
 ## Registry And Component Flow

@@ -13,6 +13,7 @@ ignore_index: -100
 loss:
   name: cross_entropy
   label_smoothing: 0.0
-# Token accuracy is configured here; perplexity is reported by the task.
+# Token metrics are configured here; perplexity is reported by the task.
 metrics:
   - accuracy
+  - top5_accuracy

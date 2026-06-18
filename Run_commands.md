@@ -1,9 +1,9 @@
 # Run Commands
 
 This file is the command reference for running the framework after the
-environment sanity checks pass. It covers training, evaluation, resume, config
-overrides, shell wrappers, Makefile shortcuts, profiling, preprocessing, and
-tracking workflows.
+environment sanity checks pass. It covers training, evaluation, test, prediction,
+resume, config overrides, shell wrappers, Makefile shortcuts, profiling,
+preprocessing, run-registry inspection, checkpoint verification, and tracking workflows.
 
 Use `sanity_check_commands.md` before this file when validating a new machine.
 
@@ -15,7 +15,7 @@ The main training/evaluation entrypoint is:
 uv run python src/main.py
 ```
 
-Runs the default Hydra config through `src/main.py`, including run setup, sanity checks, training, checkpointing, test evaluation, and prediction export.
+Runs the default Hydra config through `src/main.py`, including run setup, sanity checks, training, checkpointing, held-out test evaluation, and prediction export. Set `run.mode=eval`, `test`, `predict`, or `profile` for the other entrypoint modes.
 
 If the project is installed from `pyproject.toml`, the console-script entrypoint is:
 
@@ -210,6 +210,15 @@ uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=e
 
 These evaluate the latest/last checkpoint, best checkpoint, or epoch-5 checkpoint from the resolved training run and write results to `outputs/evaluations/<run_id>/`.
 
+### Test-Only And Predict-Only Modes
+
+```bash
+uv run python src/main.py +experiment=baseline run.mode=test checkpoint.resume=best
+uv run python src/main.py +experiment=baseline run.mode=predict checkpoint.resume=best
+```
+
+`run.mode=test` loads the checkpoint and logs held-out test metrics only. `run.mode=predict` loads the checkpoint and writes `test_predictions.json` only. `run.mode=eval` does both metrics and prediction export.
+
 Example with a manual training run id:
 
 ```bash
@@ -256,12 +265,15 @@ Hydra lets you override any config value from the command line.
 
 ```bash
 uv run python src/main.py trainer.max_epochs=20
-uv run python src/main.py trainer.log_every_n_steps=1
+uv run python src/main.py trainer.max_steps=100
+uv run python src/main.py trainer.limit_train_batches=5 trainer.limit_val_batches=2
+uv run python src/main.py trainer.val_every_n_steps=50
+uv run python src/main.py trainer.log_gradient_norm=true trainer.log_learning_rate=true
 uv run python src/main.py trainer.grad_clip=0.5
 uv run python src/main.py trainer.early_stopping.patience=3
 ```
 
-These override training loop behavior: total epochs, scalar logging frequency, gradient clipping threshold, and early-stopping patience.
+These override training loop behavior: total epochs or optimizer steps, debug batch limits, validation cadence, optional step diagnostics, gradient clipping threshold, and early-stopping patience.
 
 ### Optimizer Overrides
 
@@ -298,12 +310,14 @@ These resize the MLP or swap model/data/task groups together so the model output
 
 ```bash
 uv run python src/main.py data.batch_size=64
+uv run python src/main.py data.splits.train.batch_size=32 data.splits.val.batch_size=128
 uv run python src/main.py data.num_workers=4
 uv run python src/main.py data.pin_memory=true run.device=cuda
+uv run python src/main.py data.transforms.train.name=identity
 uv run python src/main.py data.splits.train.num_samples=1024 data.splits.val.num_samples=256
 ```
 
-These tune dataloader throughput and synthetic split sizes; `pin_memory=true` is useful when training on CUDA.
+These tune global and split-specific dataloader settings, optional input transforms, and synthetic split sizes; `pin_memory=true` is useful when training on CUDA.
 
 ### Runtime Device And Precision
 
@@ -561,6 +575,14 @@ PROFILE_CONFIG=configs/profiler.yaml bash scripts/profile.sh
 Traces are written to `profiler.trace_dir`, which defaults to `outputs/profiles/`.
 See `profiler_tutorial.md` for when to profile, how to inspect the terminal table and TensorBoard trace, and how to turn profiler output into optimization steps.
 
+Trainer-level profiling through the main entrypoint:
+
+```bash
+uv run python src/main.py run.mode=profile profiler.active_steps=3 profiler.warmup_steps=1
+```
+
+This composes the normal experiment config, builds callbacks/loggers/checkpoints like a regular run, profiles a short training-style workload, and writes traces under `outputs/runs/<run.id>/profiles/`.
+
 ### W&B Sweep Wrapper
 
 ```bash
@@ -631,26 +653,15 @@ need checkpoints or run logs.
 
 ## Distributed And Multi-GPU
 
-The repository includes distributed runtime helpers, rank-aware logging, and
-rank-aware checkpointing. The current trainer does not yet wrap models in
-`torch.nn.parallel.DistributedDataParallel`, so treat multi-process training as
-an extension task before relying on `torchrun` for gradient synchronization.
+The repository includes distributed runtime helpers, rank-aware logging, rank-aware checkpointing, distributed samplers, metric reduction, and automatic `torch.nn.parallel.DistributedDataParallel` wrapping when launched with `torchrun`.
 
-After DDP wrapping is implemented, the launch shape should be:
+Multi-process CUDA launch:
 
 ```bash
 uv run torchrun --nproc_per_node=2 src/main.py +experiment=baseline run.device=cuda data.batch_size=64
 ```
 
-Shows the intended future multi-process launch shape after DDP wrapping is implemented.
-
-For now, prefer single-process CUDA runs:
-
-```bash
-uv run python src/main.py +experiment=baseline run.device=cuda
-```
-
-Runs the baseline on a single CUDA process, which is the currently supported GPU path.
+Use the same config you would use for a single-process run. Checkpoint saving and artifact logging are rank-zero gated; dataloaders use `DistributedSampler` when the process group is active.
 
 ## Run Outputs
 
@@ -693,10 +704,14 @@ outputs/run_registry.jsonl
 
 Use those files to recover the command and config for a previous run. Each JSONL record includes `command`, `command_cwd`, run identity fields, artifact paths, and the resolved config. Run the command from `command_cwd` to repeat the invocation. Sensitive CLI values are redacted in `command`; do not put secrets directly in config values because the resolved config is stored.
 
-Print the latest repeat command:
+Inspect the run registry:
 
 ```bash
-uv run python -c "import json; print(json.loads(open('outputs/run_registry.jsonl', encoding='utf-8').read().splitlines()[-1])['command'])"
+uv run python scripts/run_registry.py list
+uv run python scripts/run_registry.py show <run_id>
+uv run python scripts/run_registry.py latest-command
+uv run python scripts/run_registry.py replay-command <run_id> --new-run-id replayed_run
+uv run python scripts/run_registry.py diff <run_id_a> <run_id_b>
 ```
 
 Replay a saved resolved config snapshot:
@@ -711,6 +726,13 @@ Run a distinct planned replay from the same saved config:
 ```bash
 uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml --run-id replayed_run
 uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml run.trial=2
+```
+
+
+Verify a checkpoint directory and selector checksums:
+
+```bash
+uv run python scripts/verify_checkpoints.py outputs/runs/<run_id>/checkpoints
 ```
 
 Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides.

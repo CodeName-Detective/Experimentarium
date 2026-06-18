@@ -6,27 +6,37 @@ The callback API is defined in `src/callbacks/base.py`. The trainer accepts call
 
 ## Current Support
 
-Callbacks work when passed directly to `Trainer`:
+Callbacks can be attached in two ways:
 
-```python
-trainer = Trainer(
-    cfg,
-    model,
-    task,
-    loaders,
-    optimizer,
-    scheduler,
-    loggers,
-    checkpoint_manager,
-    callbacks=[LearningRateLogger(), ValidationReporter()],
-)
+- Preferred for normal experiments: add callback configs under the top-level `callbacks:` list. `src/main.py` calls `build_callbacks(cfg)` from `src/callbacks/__init__.py` and passes the resulting objects to `Trainer`.
+- Useful for tests or custom scripts: instantiate callback objects directly and pass `callbacks=[...]` to `Trainer`.
+
+Built-in registered callbacks live in `src/callbacks/common.py`:
+
+- `learning_rate_logger`
+- `grad_norm_logger`
+- `training_timer`
+- `checkpoint_artifact_logger`
+
+Example config-driven usage:
+
+```yaml
+callbacks:
+  - name: learning_rate_logger
+    every_n_steps: 10
+  - name: training_timer
+  - name: checkpoint_artifact_logger
 ```
 
-`src/main.py` does not currently build callbacks from Hydra configuration. Registering a callback makes it available through `CALLBACK_REGISTRY`, but does not instantiate or attach it to the trainer automatically. See [Configurable Callbacks](#configurable-callbacks) for the required integration.
+Equivalent CLI form:
+
+```bash
+uv run python src/main.py callbacks='[{name: learning_rate_logger, every_n_steps: 10}]'
+```
 
 ## Step By Step: Add A Callback
 
-Prefer this pattern for project callbacks: implement direct hook methods on a small `Callback` subclass, register the class with `@register_callback`, and build it through `CALLBACK_REGISTRY`. That keeps callback code consistent with the rest of the framework registries instead of scattering ad hoc callback construction through training scripts.
+Prefer this pattern for project callbacks: implement direct hook methods on a small `Callback` subclass, register the class with `@register_callback`, and build it through the registry. That keeps callback construction consistent with models, datasets, tasks, losses, metrics, and optimizers.
 
 1. Pick the hook that matches the lifecycle event.
 
@@ -47,57 +57,42 @@ class LearningRateLogger(Callback):
     def __init__(self, cfg) -> None:
         self.every_n_steps = int(cfg_get(cfg, 'every_n_steps', 1))
 
-    def on_batch_end(
-        self,
-        trainer,
-        batch_idx: int,
-        metrics: dict[str, float],
-    ) -> None:
+    def on_batch_end(self, trainer, batch_idx: int, metrics: dict[str, float]) -> None:
         if trainer.global_step % self.every_n_steps != 0:
             return
-        trainer.loggers.log_metrics(
-            {'train/lr': float(trainer.optimizer.param_groups[0]['lr'])},
-            step=trainer.global_step,
-        )
+        metrics['train/lr'] = float(trainer.optimizer.param_groups[0]['lr'])
 ```
+
+`on_batch_end` receives the mutable step `metrics` dictionary. Adding values there lets the trainer log them at its normal step logging cadence.
 
 3. Import the module so registration happens.
 
 Example edit: `src/callbacks/__init__.py`
 
 ```python
-from src.callbacks.base import Callback, CallbackList
 from src.callbacks.learning_rate_logger import LearningRateLogger
-
-__all__ = ['Callback', 'CallbackList', 'LearningRateLogger']
 ```
 
 The decorator runs at import time. If the module is never imported, `CALLBACK_REGISTRY` will not know about the callback.
 
-4. Build the callback through the registry where `Trainer` is constructed.
+4. Add it to config.
 
-For the standard training entrypoint, add this wiring in `src/main.py` after the core components are built and before `trainer = Trainer(...)`. For a one-off experiment script or a test, put the same wiring in that script at the point where it constructs `Trainer`.
+Use the root `callbacks:` list in `configs/config.yaml`, an experiment YAML, or a CLI override:
 
-If you put this in `src/main.py`, import the callback registry near the other registry imports:
-
-```python
-from src.utils.registry import CALLBACK_REGISTRY, MODEL_REGISTRY
+```yaml
+callbacks:
+  - name: learning_rate_logger
+    every_n_steps: 10
 ```
 
-Then, in the body of `src/main.py`, build the callbacks before `Trainer` is created:
+5. Know where the registry builder is wired.
+
+For the standard training entrypoint, the wiring belongs in `src/main.py`. It is already present there:
 
 ```python
-callbacks = [
-    CALLBACK_REGISTRY.build(
-        'learning_rate_logger',
-        {'name': 'learning_rate_logger', 'every_n_steps': 10},
-    )
-]
-```
+from src.callbacks import build_callbacks
 
-Then pass it to `Trainer` in the same file:
-
-```python
+callbacks = build_callbacks(cfg)
 trainer = Trainer(
     cfg,
     model,
@@ -111,37 +106,36 @@ trainer = Trainer(
 )
 ```
 
-5. For Hydra-driven callbacks, add a config shape and builder.
+That means you usually do not need to edit `src/main.py` for a new callback. You only edit `src/main.py` if you are changing the callback construction policy itself.
 
-One simple root config shape is:
+6. Direct Python wiring for tests or custom scripts.
 
-```yaml
-callbacks:
-  - name: learning_rate_logger
-    every_n_steps: 10
-```
-
-Builder:
+When you are not using `src/main.py`, build through the registry in the file that constructs `Trainer`:
 
 ```python
-from src.utils.config import cfg_get
 from src.utils.registry import CALLBACK_REGISTRY
 
+callbacks = [
+    CALLBACK_REGISTRY.build(
+        'learning_rate_logger',
+        {'name': 'learning_rate_logger', 'every_n_steps': 10},
+    )
+]
 
-def build_callbacks(cfg):
-    callback_configs = list(cfg_get(cfg, 'callbacks', []) or [])
-    return [
-        CALLBACK_REGISTRY.build(
-            str(cfg_get(callback_cfg, 'name')),
-            callback_cfg,
-        )
-        for callback_cfg in callback_configs
-    ]
+trainer = Trainer(
+    cfg,
+    model,
+    task,
+    loaders,
+    optimizer,
+    scheduler,
+    loggers,
+    checkpoint_manager,
+    callbacks=callbacks,
+)
 ```
 
-Then call `build_callbacks(cfg)` in `src/main.py` before constructing `Trainer` and pass `callbacks=callbacks`. Until this wiring exists, YAML callback settings are inert.
-
-6. Add a focused test.
+7. Add a focused test.
 
 Use a tiny recording callback or a fake logger and assert the expected hook fired. Keep the test small; callback tests should verify lifecycle wiring, not retrain a real model.
 
@@ -163,8 +157,8 @@ class RecordingCallback(Callback):
 Expected validation:
 
 ```bash
-PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest tests/test_training.py -q
-uv run ruff check src tests scripts/run_sanity.py
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest tests/test_callbacks.py tests/test_training.py -q
+uv run ruff check src tests scripts/run_sanity.py scripts/run_registry.py scripts/verify_checkpoints.py
 ```
 
 ## Available Hooks
@@ -371,52 +365,27 @@ The module containing the decorated class must be imported before calling `CALLB
 
 ## Configurable Callbacks
 
-One possible root-config structure is:
+The root-config structure is active today:
+
+```yaml
+callbacks:
+  - name: learning_rate_logger
+    every_n_steps: 10
+  - name: grad_norm_logger
+    every_n_steps: 10
+  - name: training_timer
+  - name: checkpoint_artifact_logger
+```
+
+`src/callbacks/factory.py` owns `build_callbacks(cfg)`, and `src/main.py` calls it before constructing `Trainer`. Each entry requires `name`; `enabled: false` skips an entry without deleting it from an experiment file.
 
 ```yaml
 callbacks:
   - name: learning_rate_logger
     every_n_steps: 10
   - name: checkpoint_artifact_logger
+    enabled: false
 ```
-
-Add a builder:
-
-```python
-from src.utils.config import cfg_get
-from src.utils.registry import CALLBACK_REGISTRY
-
-
-def build_callbacks(cfg):
-    callback_configs = list(cfg_get(cfg, 'callbacks', []) or [])
-    return [
-        CALLBACK_REGISTRY.build(
-            str(cfg_get(callback_cfg, 'name')),
-            callback_cfg,
-        )
-        for callback_cfg in callback_configs
-    ]
-```
-
-Then update `src/main.py`:
-
-```python
-callbacks = build_callbacks(cfg)
-
-trainer = Trainer(
-    cfg,
-    model,
-    task,
-    loaders,
-    optimizer,
-    scheduler,
-    loggers,
-    checkpoint_manager,
-    callbacks=callbacks,
-)
-```
-
-Until this builder is added to `src/main.py`, callback YAML has no effect.
 
 ## Distributed Training
 

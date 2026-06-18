@@ -31,7 +31,9 @@ class SegmentationTask(BaseTask):
 
     def step(self, model: nn.Module, batch: dict[str, Any], stage: str) -> StepResult:
         """Compute per-pixel loss and configured metrics."""
+        self.validate_batch(batch, self.target_key)
         outputs = model(batch)
+        self.validate_outputs(outputs, self.output_key)
         logits = outputs[self.output_key]
         targets = batch[self.target_key].long()
         if logits.ndim < 3:

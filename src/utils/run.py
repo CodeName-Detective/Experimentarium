@@ -174,7 +174,7 @@ def _resolve_run_id(base_run_id: str, run_dir: Path, config_path: Path) -> tuple
 
 
 def _is_evaluation(cfg: Any) -> bool:
-    return str(cfg_get(cfg, 'run.mode', 'train')).lower() == 'eval'
+    return str(cfg_get(cfg, 'run.mode', 'train')).lower() in {'eval', 'test', 'predict'}
 
 
 def _is_training_resume(cfg: Any) -> bool:

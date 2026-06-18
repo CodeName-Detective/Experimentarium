@@ -3,7 +3,7 @@ import torch
 from torch import nn
 
 from src.engine.evaluator import Evaluator, move_to_device
-from src.tasks import DetectionTask, LanguageModelingTask, RankingTask, SegmentationTask, build_task
+from src.tasks import ClassificationTask, DetectionTask, LanguageModelingTask, RankingTask, SegmentationTask, build_task
 
 
 class StaticOutputModel(nn.Module):
@@ -175,3 +175,36 @@ def test_evaluator_uses_configured_precision_context_for_eval_and_predict(monkey
     evaluator.predict(loader)
 
     assert calls == [('cpu', 'bf16'), ('cpu', 'bf16')]
+
+
+def test_detection_task_computes_map50_for_matching_boxes():
+    task = DetectionTask({'output_key': 'detections', 'target_key': 'targets', 'metrics': ['map50']})
+    batch = {
+        'input': torch.randn(1, 3, 8, 8),
+        'targets': [{'boxes': torch.tensor([[0.0, 0.0, 2.0, 2.0]]), 'labels': torch.tensor([1])}],
+    }
+    model = StaticOutputModel({
+        'detections': [
+            {
+                'boxes': torch.tensor([[0.0, 0.0, 2.0, 2.0]]),
+                'scores': torch.tensor([0.9]),
+                'labels': torch.tensor([1]),
+            }
+        ]
+    })
+
+    task.step(model, batch, stage='val')
+
+    assert task.compute_metrics()['map50'] == pytest.approx(1.0)
+
+
+def test_task_schema_validation_reports_missing_batch_key():
+    task = ClassificationTask({
+        'output_key': 'logits',
+        'target_key': 'label',
+        'loss': {'name': 'cross_entropy'},
+        'metrics': [],
+    })
+
+    with pytest.raises(KeyError, match='missing required key'):
+        task.step(StaticOutputModel({'logits': torch.randn(1, 2)}), {'input': torch.randn(1, 4)}, stage='train')

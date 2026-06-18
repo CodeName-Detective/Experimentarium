@@ -16,10 +16,19 @@ num_workers: 0
 pin_memory: false
 # Whether to drop the last incomplete training batch.
 drop_last: false
-# Per-split synthetic dataset sizes.
+# Optional input transforms applied by src.data.dataloader.TransformDataset.
+# transforms:
+#   train:
+#     name: identity
+#   val:
+#     name: identity
+#   test:
+#     name: identity
+# Per-split synthetic dataset sizes and optional dataloader overrides.
 splits:
   # Training split used for gradient updates.
   train:
+    # Optional split overrides: batch_size, num_workers, pin_memory, shuffle, drop_last, prefetch_factor.
     num_samples: 256
   # Validation split used for model selection and scheduler monitors.
   val:

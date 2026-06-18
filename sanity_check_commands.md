@@ -295,9 +295,14 @@ uv run tensorboard --logdir outputs/profiles
 
 For result interpretation and optimization workflow, see `profiler_tutorial.md`.
 
-Use the wrapper for a quick profiler/toolchain check. It does not profile the
-full `src/main.py` training loop. For alternate profiler settings, either edit
-`configs/profiler.yaml` or run `PROFILE_CONFIG=<path> bash scripts/profile.sh`.
+Use the wrapper for a quick profiler/toolchain check. For profiler coverage of
+the normal composed trainer stack, use the main entrypoint:
+
+```bash
+uv run python src/main.py run.mode=profile profiler.active_steps=3 profiler.warmup_steps=1
+```
+
+This writes traces under `outputs/runs/<run.id>/profiles/`. For alternate standalone wrapper settings, either edit `configs/profiler.yaml` or run `PROFILE_CONFIG=<path> bash scripts/profile.sh`.
 
 ## Run-Specific Overrides
 

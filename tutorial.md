@@ -122,7 +122,7 @@ Important behavior:
 - The base id is derived from `run.name`, model/data/task names, `run.trial`, and `run.config_id`.
 - If a fresh run would reuse an existing id, it keeps that id and emits a warning instead of creating `<base>_2` or `<base>_3`; intentional training resumes do not emit the reuse warning.
 - Repeated identical configs keep the same `run.config_id` and append artifacts under the same `run.id`.
-- In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while preserving `run.id` and writing eval artifacts to `outputs/evaluations/<run.id>/`.
+- In eval/test/predict mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while preserving `run.id` and writing evaluation artifacts to `outputs/evaluations/<run.id>/`.
 
 Try it:
 
@@ -139,7 +139,7 @@ ls outputs/runs
 cat outputs/run_registry.jsonl
 # Print the latest repeat command
 # Run it from the recorded command_cwd.
-uv run python -c "import json; print(json.loads(open('outputs/run_registry.jsonl', encoding='utf-8').read().splitlines()[-1])['command'])"
+uv run python scripts/run_registry.py latest-command
 ```
 
 Create planned repeats:
@@ -924,7 +924,7 @@ Open with TensorBoard:
 uv run tensorboard --logdir outputs/profiles
 ```
 
-Use this when a model or dataloader change becomes slow and you need operator-level traces. See `profiler_tutorial.md` for how to interpret the table, inspect TensorBoard traces, and decide what to optimize.
+Use this when a model or dataloader change becomes slow and you need operator-level traces. To profile the composed trainer stack instead of the standalone wrapper, run `uv run python src/main.py run.mode=profile profiler.active_steps=3`. See `profiler_tutorial.md` for how to interpret the table, inspect TensorBoard traces, and decide what to optimize.
 
 ## Tutorial 21: Run A W&B Sweep
 
@@ -969,15 +969,20 @@ class LearningRateLogger(Callback):
         trainer.loggers.log_metrics({'train/lr': learning_rate}, step=trainer.global_step)
 ```
 
-Current trainer accepts callbacks through its constructor, but `src/main.py` does not yet build callbacks from config. To make callbacks configurable, add a callback config group and build registered callbacks in `src/main.py` before constructing `Trainer`.
+`src/main.py` already builds callbacks from the top-level `callbacks:` list through `src.callbacks.build_callbacks(cfg)`. For normal experiments, register the callback and add it to config:
+
+```yaml
+callbacks:
+  - name: learning_rate_logger
+    every_n_steps: 10
+```
 
 Minimal extension path:
 
-1. Add `configs/callback/*.yaml` or a callback list under `configs/config.yaml`.
-2. Import `CALLBACK_REGISTRY` in `src/main.py`.
-3. Build callback objects from config.
-4. Pass `callbacks=callbacks` to `Trainer(...)`.
-5. Add a test that verifies the hook runs.
+1. Add the callback class under `src/callbacks/` and decorate it with `@register_callback`.
+2. Import the module from `src/callbacks/__init__.py` so registration happens.
+3. Add an entry under `callbacks:` in `configs/config.yaml`, an experiment YAML, or the CLI.
+4. Add a focused test that verifies the hook runs.
 
 ## Tutorial 23: Add A Custom Logger Backend
 
@@ -1072,23 +1077,21 @@ Current distributed support includes:
 - Distributed metric averaging in `Evaluator`.
 - Broadcast of the rank-zero selected run id.
 
-Important limitation:
+The standard entrypoint wraps the model with `torch.nn.parallel.DistributedDataParallel` when launched with `torchrun`, and checkpoints unwrap the model state before saving/loading.
 
-The current trainer does not wrap the model in `torch.nn.parallel.DistributedDataParallel`. That means true multi-process gradient synchronization is not complete yet. Before relying on multi-GPU training, add DDP wrapping.
-
-Extension path:
-
-1. After moving the model to device in `Trainer.__init__`, wrap it when `torch.distributed.is_initialized()`.
-2. Use `local_rank()` to set CUDA device when launched with `torchrun`.
-3. Save `model.module.state_dict()` when the model is wrapped, or unwrap before checkpointing.
-4. Keep logging and checkpointing rank-zero only.
-5. Add a small `torchrun --nproc_per_node=2` smoke test on CPU with `gloo` or on GPU with `nccl`.
-
-Example launch after DDP wrapping is implemented:
+CPU smoke launch with `gloo`:
 
 ```bash
 uv run torchrun --nproc_per_node=2 src/main.py +experiment=sanity_cpu run.distributed_backend=gloo run.device=cpu
 ```
+
+CUDA launch with `nccl`:
+
+```bash
+uv run torchrun --nproc_per_node=2 src/main.py +experiment=baseline run.device=cuda data.batch_size=64
+```
+
+Keep custom callbacks rank-aware if they write files or call external services.
 
 ## Tutorial 27: Adapt The Template To A Real Project
 

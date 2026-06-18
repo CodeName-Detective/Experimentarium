@@ -40,6 +40,102 @@ def mae(preds: Tensor, targets: Tensor) -> float:
     return torch.nn.functional.l1_loss(preds.float(), targets.float()).item()
 
 
+@register_metric('top5_accuracy')
+def top5_accuracy(logits: Tensor, targets: Tensor) -> float:
+    """Compute top-5 categorical accuracy."""
+    k = min(5, logits.shape[-1])
+    topk = logits.topk(k, dim=-1).indices
+    return topk.eq(targets.long().unsqueeze(-1)).any(dim=-1).float().mean().item()
+
+
+@register_metric('iou')
+def mean_iou(logits: Tensor, targets: Tensor) -> float:
+    """Compute macro IoU from logits and integer targets."""
+    preds = logits.argmax(dim=-1).reshape(-1)
+    targets = targets.long().reshape(-1)
+    classes = torch.unique(torch.cat([preds, targets]))
+    scores = []
+    for cls in classes:
+        pred_mask = preds == cls
+        target_mask = targets == cls
+        union = torch.logical_or(pred_mask, target_mask).sum().item()
+        if union:
+            intersection = torch.logical_and(pred_mask, target_mask).sum().item()
+            scores.append(intersection / union)
+    return float(sum(scores) / max(1, len(scores)))
+
+
+@register_metric('dice')
+def dice_score(logits: Tensor, targets: Tensor) -> float:
+    """Compute macro Dice score from logits and integer targets."""
+    preds = logits.argmax(dim=-1).reshape(-1)
+    targets = targets.long().reshape(-1)
+    classes = torch.unique(torch.cat([preds, targets]))
+    scores = []
+    for cls in classes:
+        pred_mask = preds == cls
+        target_mask = targets == cls
+        denominator = pred_mask.sum().item() + target_mask.sum().item()
+        if denominator:
+            intersection = torch.logical_and(pred_mask, target_mask).sum().item()
+            scores.append((2.0 * intersection) / denominator)
+    return float(sum(scores) / max(1, len(scores)))
+
+
+@register_metric('ndcg')
+def ndcg(scores: Tensor, relevance: Tensor) -> float:
+    """Compute mean normalized discounted cumulative gain."""
+    scores = scores.float()
+    relevance = relevance.float()
+    if scores.ndim == 1:
+        scores = scores.unsqueeze(0)
+        relevance = relevance.unsqueeze(0)
+    values = []
+    discounts = 1.0 / torch.log2(torch.arange(scores.shape[1], device=scores.device, dtype=torch.float32) + 2.0)
+    for row_scores, row_relevance in zip(scores, relevance, strict=False):
+        order = row_scores.argsort(descending=True)
+        ideal = row_relevance.argsort(descending=True)
+        dcg = ((2.0 ** row_relevance[order] - 1.0) * discounts).sum()
+        idcg = ((2.0 ** row_relevance[ideal] - 1.0) * discounts).sum()
+        values.append(float((dcg / idcg.clamp_min(torch.finfo(torch.float32).eps)).item()))
+    return float(sum(values) / max(1, len(values)))
+
+
+@register_metric('mrr')
+def mean_reciprocal_rank(scores: Tensor, relevance: Tensor) -> float:
+    """Compute mean reciprocal rank using positive relevance as relevant."""
+    scores = scores.float()
+    relevance = relevance.float()
+    if scores.ndim == 1:
+        scores = scores.unsqueeze(0)
+        relevance = relevance.unsqueeze(0)
+    values = []
+    for row_scores, row_relevance in zip(scores, relevance, strict=False):
+        order = row_scores.argsort(descending=True)
+        relevant = row_relevance[order] > 0
+        indices = torch.nonzero(relevant, as_tuple=False).flatten()
+        values.append(0.0 if indices.numel() == 0 else 1.0 / float(indices[0].item() + 1))
+    return float(sum(values) / max(1, len(values)))
+
+
+@register_metric('precision_at_1')
+def precision_at_1(scores: Tensor, relevance: Tensor) -> float:
+    """Compute precision at rank 1 using positive relevance as relevant."""
+    scores = scores.float()
+    relevance = relevance.float()
+    if scores.ndim == 1:
+        scores = scores.unsqueeze(0)
+        relevance = relevance.unsqueeze(0)
+    top = scores.argmax(dim=-1)
+    return (relevance.gather(1, top.unsqueeze(1)).squeeze(1) > 0).float().mean().item()
+
+
+@register_metric('map50')
+def map50_placeholder(preds: Tensor, targets: Tensor) -> float:
+    """Placeholder registry entry; DetectionTask computes structured mAP@50."""
+    return 0.0
+
+
 @dataclass
 class MetricAccumulator:
     """Accumulate weighted scalar metric values across batches."""

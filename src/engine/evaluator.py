@@ -12,6 +12,7 @@ Typical usage:
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -60,13 +61,16 @@ class Evaluator:
         self.precision = precision
 
     @torch.no_grad()
-    def evaluate(self, loader: Iterable[Batch], prefix: str = 'val') -> dict[str, float]:
+    def evaluate(self, loader: Iterable[Batch], prefix: str = 'val', limit_batches: Any = None) -> dict[str, float]:
         """Evaluate a loader and return prefixed aggregate metrics."""
         self.model.eval()
         self.task.reset_metrics()
         total_loss = 0.0
         loss_count = 0
-        for batch in loader:
+        max_batches = _batch_limit(loader, limit_batches)
+        for batch_idx, batch in enumerate(loader, start=1):
+            if max_batches is not None and batch_idx > max_batches:
+                break
             batch = move_to_device(batch, self.device)
             with precision_autocast(self.device, self.precision):
                 result = self.task.step(self.model, batch, stage=prefix)
@@ -81,11 +85,16 @@ class Evaluator:
         return {f'{prefix}/{key}': value for key, value in metrics.items()}
 
     @torch.no_grad()
-    def predict(self, loader: Iterable[Batch], limit: int | None = None) -> list[dict[str, Any]]:
+    def predict(
+        self, loader: Iterable[Batch], limit: int | None = None, limit_batches: Any = None
+    ) -> list[dict[str, Any]]:
         """Generate serializable prediction records from a loader."""
         self.model.eval()
         records: list[dict[str, Any]] = []
-        for batch in loader:
+        max_batches = _batch_limit(loader, limit_batches)
+        for batch_idx, batch in enumerate(loader, start=1):
+            if max_batches is not None and batch_idx > max_batches:
+                break
             batch = move_to_device(batch, self.device)
             with precision_autocast(self.device, self.precision):
                 outputs = self.model(batch)
@@ -93,3 +102,26 @@ class Evaluator:
             if limit is not None and len(records) >= limit:
                 return records[:limit]
         return records
+
+
+def _batch_limit(loader: Any, configured: Any) -> int | None:
+    if configured is None:
+        return None
+    if isinstance(configured, str):
+        normalized = configured.lower()
+        if normalized in {'none', 'null'}:
+            return None
+        if any(marker in normalized for marker in ('.', 'e')):
+            return _fractional_batch_limit(loader, float(configured))
+        return max(0, int(configured))
+    if isinstance(configured, int) and not isinstance(configured, bool):
+        return max(0, configured)
+    return _fractional_batch_limit(loader, float(configured))
+
+
+def _fractional_batch_limit(loader: Any, value: float) -> int:
+    if 0.0 < value <= 1.0:
+        if not hasattr(loader, '__len__'):
+            raise ValueError('Fractional batch limits require a sized dataloader')
+        return max(1, math.ceil(len(loader) * value))
+    return max(0, int(value))

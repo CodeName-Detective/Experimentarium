@@ -6,6 +6,8 @@ import torch
 def tiny_cfg():
     return {
         'run': {'seed': 42, 'device': 'cpu', 'precision': 'fp32', 'deterministic': False, 'debug': False},
+        'callbacks': [],
+        'profiler': {'split': 'train', 'active_steps': 1},
         'model': {'name': 'mlp', 'input_dim': 16, 'hidden_dim': 32, 'num_layers': 1, 'num_classes': 2, 'dropout': 0.0},
         'data': {
             'name': 'toy_classification',
@@ -32,6 +34,13 @@ def tiny_cfg():
             'grad_clip': 1.0,
             'log_every_n_steps': 1,
             'val_every_n_epochs': 1,
+            'val_every_n_steps': 0,
+            'limit_train_batches': None,
+            'limit_val_batches': None,
+            'limit_test_batches': None,
+            'skip_test_after_train': False,
+            'log_gradient_norm': False,
+            'log_learning_rate': False,
             'early_stopping': {'patience': 0},
         },
         'checkpoint': {

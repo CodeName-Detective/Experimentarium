@@ -93,6 +93,26 @@ def cleanup() -> None:
         dist.destroy_process_group()
 
 
+def unwrap_model(model: Any) -> Any:
+    """Return the underlying module when a model is wrapped by DDP."""
+    return getattr(model, 'module', model)
+
+
+def wrap_model_for_distributed(model: Any, device: Any) -> Any:
+    """Wrap a model in DistributedDataParallel when launched with torchrun."""
+    if not is_initialized():
+        return model
+    try:
+        import torch
+        from torch.nn.parallel import DistributedDataParallel
+    except ModuleNotFoundError as exc:
+        raise RuntimeError('torch is required for distributed model wrapping') from exc
+    resolved_device = torch.device(device)
+    if resolved_device.type == 'cuda':
+        return DistributedDataParallel(model, device_ids=[local_rank()], output_device=local_rank())
+    return DistributedDataParallel(model)
+
+
 def mean_scalar(value: float, device: Any = 'cpu') -> float:
     """Average a scalar value across distributed ranks."""
     if not is_initialized():

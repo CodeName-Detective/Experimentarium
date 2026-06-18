@@ -60,6 +60,7 @@ class Registry:
 
 MODEL_REGISTRY = Registry('model')
 DATASET_REGISTRY = Registry('dataset')
+TRANSFORM_REGISTRY = Registry('transform')
 LOSS_REGISTRY = Registry('loss')
 METRIC_REGISTRY = Registry('metric')
 OPTIMIZER_REGISTRY = Registry('optimizer')
@@ -77,6 +78,11 @@ def register_model(name: str) -> Callable[[RegistryItem], RegistryItem]:
 def register_dataset(name: str) -> Callable[[RegistryItem], RegistryItem]:
     """Register a dataset factory or class."""
     return DATASET_REGISTRY.register(name)
+
+
+def register_transform(name: str) -> Callable[[RegistryItem], RegistryItem]:
+    """Register a transform factory or callable."""
+    return TRANSFORM_REGISTRY.register(name)
 
 
 def register_loss(name: str) -> Callable[[RegistryItem], RegistryItem]:

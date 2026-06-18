@@ -43,3 +43,6 @@ required_config_keys:
   - trainer.max_epochs
   - checkpoint.dir
   - checkpoint.monitor
+  - callbacks
+  - profiler.active_steps
+  - trainer.val_every_n_steps

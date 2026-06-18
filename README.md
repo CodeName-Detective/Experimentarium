@@ -89,7 +89,7 @@ Run tests and lint:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
-uv run ruff check src tests scripts/run_sanity.py
+uv run ruff check src tests scripts/run_sanity.py scripts/run_registry.py scripts/verify_checkpoints.py
 ```
 
 Train the default toy classification experiment:
@@ -151,7 +151,7 @@ outputs/
       profiles/
 ```
 
-Runs reuse the same run folder when the derived or manual id already exists. Fresh duplicate runs emit a capital warning and append new logs, metrics, predictions, and tracking events under the existing `outputs/runs/<run.id>/` directory. Intentional training resumes with `checkpoint.resume=...` do not emit that reuse warning; the trainer logs the resume epoch after loading the checkpoint. Evaluation keeps the source training `run.id`, loads checkpoints from `outputs/runs/<run.id>/checkpoints/`, and writes results plus its resolved config to `outputs/evaluations/<run.id>/`.
+Runs reuse the same run folder when the derived or manual id already exists. Fresh duplicate runs emit a capital warning and append new logs, metrics, predictions, and tracking events under the existing `outputs/runs/<run.id>/` directory. Intentional training resumes with `checkpoint.resume=...` do not emit that reuse warning; the trainer logs the resume epoch after loading the checkpoint. `eval`, `test`, and `predict` modes keep the source training `run.id`, load checkpoints from `outputs/runs/<run.id>/checkpoints/`, and write results plus their resolved config to `outputs/evaluations/<run.id>/`.
 
 To create a planned repeat with a different base id, change a config value that is part of the run identity or provide a manual id:
 
@@ -160,9 +160,9 @@ uv run python src/main.py +experiment=baseline run.trial=2
 uv run python src/main.py +experiment=baseline run.id=my_manual_run_id
 ```
 
-W&B receives the resolved config through `wandb.init(config=...)`, uses `run.tracking_id` as the W&B id and default name, and logs the resolved config YAML as a W&B artifact. Training uses `run.tracking_id=<run.id>`; evaluation keeps `run.id=<run.id>` for the filesystem while using `run.tracking_id=<run.id>_evaluation` to avoid merging tracking records.
+W&B receives the resolved config through `wandb.init(config=...)`, uses `run.tracking_id` as the W&B id and default name, and logs the resolved config YAML as a W&B artifact. Training uses `run.tracking_id=<run.id>`; `eval`, `test`, and `predict` keep `run.id=<run.id>` for the filesystem while using `run.tracking_id=<run.id>_evaluation` to avoid merging tracking records.
 
-Each `outputs/run_registry.jsonl` record includes a shell-safe `command` and `command_cwd`. Run that command from the recorded directory to repeat the same invocation. Sensitive CLI argument values are redacted in `command`, but avoid putting secrets in config values because the resolved config is also stored for reproducibility.
+Each `outputs/run_registry.jsonl` record includes a shell-safe `command` and `command_cwd`. Run that command from the recorded directory to repeat the same invocation, or use `uv run python scripts/run_registry.py replay-command <run_id>` to print a replay command from the saved resolved config. Sensitive CLI argument values are redacted in `command`, but avoid putting secrets in config values because the resolved config is also stored for reproducibility.
 
 You can also replay a resolved output config directly:
 
@@ -228,10 +228,10 @@ uv run python src/main.py +experiment=baseline
 uv run python src/main.py +experiment=regression
 uv run python src/main.py +experiment=ablation_heads
 
-# Evaluate a checkpoint
+# Evaluate/test/predict from a checkpoint
 uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
-uv run python src/main.py run.mode=eval checkpoint.resume=best
-uv run python src/main.py run.mode=eval checkpoint.resume=epoch_0005
+uv run python src/main.py run.mode=test checkpoint.resume=best
+uv run python src/main.py run.mode=predict checkpoint.resume=epoch_0005
 bash scripts/eval.sh outputs/runs/<run_id>/checkpoints/best.pt
 
 # Resume training from latest checkpoint in this config-derived run directory
@@ -249,6 +249,9 @@ uv run python src/main.py data=tensor_file scheduler=none
 bash scripts/profile.sh
 PROFILE_CUDA=1 bash scripts/profile.sh
 PROFILE_CONFIG=configs/profiler.yaml bash scripts/profile.sh
+
+# Profile the configured trainer stack through src/main.py
+uv run python src/main.py run.mode=profile profiler.active_steps=3
 
 # Launch a W&B sweep after installing tracking extras
 uv sync --extra tracking          # if keeping pyproject.toml
@@ -284,7 +287,7 @@ uv run python src/main.py run.device=cuda run.precision=amp data.batch_size=128
 
 Experiment presets are opt-in: files under `configs/experiment/` are not composed by default and only apply when selected with `+experiment=<name>`. Their values override the root defaults and selected config-group settings.
 
-Profiler defaults live in `configs/profiler.yaml` and are loaded by `bash scripts/profile.sh`; use `PROFILE_CONFIG=<path>` for an alternate profiler config.
+Standalone profiler defaults live in `configs/profiler.yaml` and are loaded by `bash scripts/profile.sh`; use `PROFILE_CONFIG=<path>` for an alternate profiler config. Trainer-level profiling through `src/main.py run.mode=profile` uses the top-level `profiler:` block in `configs/config.yaml` plus any CLI overrides.
 
 Use experiment files for repeatable research runs:
 
@@ -388,9 +391,9 @@ The checkpoint state includes model, optimizer, scheduler, scaler, RNG state, ep
 
 ## Distributed And Mixed Precision
 
-The framework includes distributed runtime helpers, rank-zero logging/checkpointing, distributed dataloader samplers, metric reduction, and run-id broadcast. The current trainer does not yet wrap the model in `torch.nn.parallel.DistributedDataParallel`, so treat true multi-process training as an extension task before relying on `torchrun` for gradient synchronization. See `tutorial.md` for the DDP extension path.
+The framework includes distributed runtime helpers, rank-zero logging/checkpointing, distributed dataloader samplers, metric reduction, run-id broadcast, and automatic `torch.nn.parallel.DistributedDataParallel` wrapping when launched with `torchrun`.
 
-After DDP wrapping is implemented, a launch should look like:
+A multi-process launch looks like:
 
 ```bash
 uv run torchrun --nproc_per_node=2 src/main.py run.device=cuda data.batch_size=64
@@ -406,7 +409,7 @@ uv run python src/main.py run.precision=bf16
 
 `run.precision=fp32` uses the normal non-autocast path for training, validation, test evaluation, and prediction export. `amp`, `fp16`, and `bf16` use the same CUDA autocast policy across training and evaluator/prediction paths.
 
-`src/runtime/distributed.py` handles rank helpers, small-object broadcast, and distributed metric reduction. The trainer initializes distributed runtime from the `torchrun` environment when present.
+`src/runtime/distributed.py` handles rank helpers, DDP wrapping/unwrapping, small-object broadcast, and distributed metric reduction. `src/main.py` initializes distributed runtime from the `torchrun` environment when present.
 
 ## Validation Checklist
 
@@ -414,7 +417,7 @@ Run this before treating changes as reliable:
 
 ```bash
 python3 -m compileall src scripts tests
-uv run ruff check src tests scripts/run_sanity.py
+uv run ruff check src tests scripts/run_sanity.py scripts/run_registry.py scripts/verify_checkpoints.py
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
 uv run python scripts/run_sanity.py +experiment=sanity_cpu
 uv run python scripts/run_sanity.py +experiment=sanity_cpu sanity.check_all_experiments=true

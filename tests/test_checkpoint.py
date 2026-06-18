@@ -63,3 +63,15 @@ def test_checkpoint_checksum_uses_latest_manifest_entry(tmp_path):
     state = manager.load(Path(tmp_path, 'epoch_0005.pt'), reloaded)
 
     assert state['epoch'] == 5
+
+
+def test_checkpoint_verify_reports_selector_checksum_mismatch(tmp_path):
+    model = MLP({'input_dim': 4, 'hidden_dim': 8, 'output_dim': 2})
+    manager = CheckpointManager(tmp_path, keep_last_k=2, save_top_k=1)
+    manager.save(_state(model), epoch=1, metric=0.5, is_best=True)
+
+    assert manager.verify() == []
+
+    Path(tmp_path, 'last.pt').write_text('corrupt', encoding='utf-8')
+
+    assert any('last.pt' in issue for issue in manager.verify())

@@ -27,7 +27,9 @@ class RankingTask(BaseTask):
 
     def step(self, model: nn.Module, batch: dict[str, Any], stage: str) -> StepResult:
         """Compute ranking loss and configured score metrics."""
+        self.validate_batch(batch, self.target_key)
         outputs = model(batch)
+        self.validate_outputs(outputs, self.output_key)
         scores = outputs[self.output_key].float()
         targets = batch[self.target_key].float()
         if scores.shape != targets.shape:

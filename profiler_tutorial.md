@@ -2,7 +2,7 @@
 
 Use this guide when training feels slower than expected, GPU utilization is low, memory use is surprising, or a model/data change needs performance investigation. The profiler answers a specific question: where does time go during a representative workload?
 
-The repository profiler entrypoint is `scripts/profile.sh`. It loads `configs/profiler.yaml`, runs the configured forward/backward workload with `torch.profiler`, prints the top operators by CPU time, and writes TensorBoard-compatible traces under `outputs/profiles/` by default.
+There are two profiler entrypoints. `scripts/profile.sh` loads `configs/profiler.yaml` and profiles a standalone smoke workload, writing traces under `outputs/profiles/` by default. `uv run python src/main.py run.mode=profile` composes a normal experiment config, builds the trainer stack, and profiles a short training-style workload under `outputs/runs/<run.id>/profiles/`.
 
 ## When To Use It
 
@@ -39,7 +39,19 @@ Run with an alternate profiler config:
 PROFILE_CONFIG=configs/profiler.yaml bash scripts/profile.sh
 ```
 
-Open traces with TensorBoard. Use the configured `profiler.trace_dir` if you changed it:
+Profile the normal `src/main.py` trainer stack:
+
+```bash
+uv run python src/main.py run.mode=profile profiler.warmup_steps=1 profiler.active_steps=3
+```
+
+Profile a named experiment with the same model/data/task config you train with:
+
+```bash
+uv run python src/main.py +experiment=baseline run.mode=profile run.device=cuda run.precision=amp profiler.active_steps=5
+```
+
+Open traces with TensorBoard. Use `outputs/profiles` for the standalone wrapper and `outputs/runs/<run.id>/profiles` for `run.mode=profile`:
 
 ```bash
 uv run tensorboard --logdir outputs/profiles
@@ -59,7 +71,7 @@ aten::linear                 ...             ...           ...             ...  
 aten::addmm                  ...             ...           ...             ...            ...
 ```
 
-## What The Current Wrapper Profiles
+## What Each Entrypoint Profiles
 
 `scripts/profile.sh` profiles the workload defined in `configs/profiler.yaml`, not your full experiment. The default config is intentionally tiny:
 
@@ -73,6 +85,8 @@ aten::addmm                  ...             ...           ...             ...  
 - CUDA profiling: enabled with `PROFILE_CUDA=1`, `profiler.cuda: true`, or `run.device: cuda`
 
 This is useful for checking that profiler tooling works and for understanding operator-level output. To optimize a real project, edit `configs/profiler.yaml` or pass `PROFILE_CONFIG=<path>` so the profiler uses your model, dataset, task, batch size, precision, and several representative training steps.
+
+`run.mode=profile` profiles the trainer stack built from the composed Hydra config. It uses the configured model, task, optimizer, precision policy, dataloader split, and profiler settings from the top-level `profiler:` block in `configs/config.yaml` or CLI overrides. It is the better option when you want the profile to match a real experiment config without duplicating that config into `configs/profiler.yaml`.
 
 ## Read The Terminal Table
 
@@ -193,7 +207,7 @@ Possible fixes:
 
 ## Adapting The Profiler Config For A Real Experiment
 
-The current config is intentionally tiny. For real optimization, edit `configs/profiler.yaml` or create another profiler config and run it with `PROFILE_CONFIG=<path> bash scripts/profile.sh`. Keep the script stable and move workload-specific choices into YAML.
+The wrapper config is intentionally tiny. For real optimization, either edit `configs/profiler.yaml` and run `PROFILE_CONFIG=<path> bash scripts/profile.sh`, or use `run.mode=profile` with the same Hydra overrides as the experiment you care about. Keep workload-specific profiler choices in YAML or explicit CLI overrides.
 
 Recommended changes:
 
@@ -211,8 +225,8 @@ A more realistic profiler should answer: what is slow in the run I actually care
 
 ## Limits And Caveats
 
-- The default wrapper does not profile `src/main.py` or the full trainer loop.
-- The default config profiles one tiny step, so results may not match large real workloads until you customize `configs/profiler.yaml`.
+- The standalone wrapper does not profile `src/main.py`; use `run.mode=profile` when you want the composed trainer stack.
+- The default wrapper config profiles one tiny step, so results may not match large real workloads until you customize `configs/profiler.yaml` or use experiment overrides with `run.mode=profile`.
 - CUDA work is asynchronous; timeline interpretation is more reliable than isolated CPU timing for GPU-heavy code.
 - Profiling adds overhead. Compare profiled runs to profiled runs, not profiled runs to normal training logs.
 - `record_shapes=True` helps explain shape-related cost but adds overhead.

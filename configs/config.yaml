@@ -33,7 +33,7 @@ run:
   trial: 1
   # Optional explicit base run id. Null means derive one from run.name, model/data/task, trial, and config hash.
   id: null
-  # Execution mode consumed by src/main.py: train, eval, or test.
+  # Execution mode consumed by src/main.py: train, eval, test, predict, or profile.
   mode: train
   # Base random seed for Python, NumPy, PyTorch, and dataloader workers.
   seed: 42
@@ -73,6 +73,30 @@ run:
   config_path: null
   # Stable hash of the effective config used to derive the base run id; filled by prepare_run.
   config_id: null
+
+# Optional callback configs built through CALLBACK_REGISTRY and passed to Trainer.
+callbacks: []
+
+# Trainer-level profiling settings used when run.mode=profile.
+profiler:
+  # Dataloader split sampled by the profiler.
+  split: train
+  # Run unrecorded steps first to avoid measuring one-time setup cost.
+  warmup_steps: 0
+  # Number of recorded training-style steps.
+  active_steps: 1
+  # If true, run backward and optimizer steps during profiling.
+  backward: true
+  # Record CUDA profiler activities when run.device is CUDA.
+  cuda: true
+  # torch.profiler options.
+  record_shapes: true
+  profile_memory: false
+  with_stack: false
+  with_flops: false
+  # Printed profiler summary options.
+  sort_by: cpu_time_total
+  row_limit: 15
 
 # Deprecated aliases kept for older scripts. Prefer run.seed and run.device.
 seed: ${run.seed}

@@ -25,12 +25,16 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import hydra
+import torch
 from omegaconf import DictConfig, OmegaConf
 
+from src.callbacks import build_callbacks
 from src.data import build_dataloaders
 from src.engine import Evaluator, Trainer
+from src.engine.evaluator import move_to_device
+from src.engine.precision import precision_autocast
 from src.optim import build_optimizer, build_scheduler
-from src.runtime.distributed import cleanup as cleanup_distributed, setup_from_env
+from src.runtime.distributed import cleanup as cleanup_distributed, setup_from_env, wrap_model_for_distributed
 from src.tasks import build_task
 from src.utils.checkpoint import CheckpointManager
 from src.utils.config import cfg_get, config_to_dict, load_config
@@ -63,7 +67,7 @@ _GENERATED_REPLAY_PATHS = (
 
 
 def run(cfg: Any) -> None:
-    """Run the configured training or evaluation workflow."""
+    """Run the configured training, evaluation, prediction, or profiling workflow."""
     setup_from_env(str(cfg_get(cfg, 'run.distributed_backend', 'nccl')))
     run_info = prepare_run(cfg)
     setup_reproducibility(
@@ -78,13 +82,18 @@ def run(cfg: Any) -> None:
     if run_info.warning:
         logger.warning('\033[1;33m%s\033[0m', run_info.warning)
     logger.info('run_id=%s config_id=%s run_dir=%s', run_info.run_id, run_info.config_id, run_info.run_dir)
-    mode = str(cfg_get(cfg, 'run.mode', 'train'))
+    mode = str(cfg_get(cfg, 'run.mode', 'train')).lower()
+    valid_modes = {'train', 'eval', 'test', 'predict', 'profile'}
     is_checkpoint_resume = bool(cfg_get(cfg, 'checkpoint.resume', None))
     try:
-        if mode != 'eval' and not (mode == 'train' and is_checkpoint_resume):
+        if mode not in valid_modes:
+            raise ValueError(f'Unknown run.mode={mode}. Expected one of {sorted(valid_modes)}')
+        if _should_run_sanity(mode, is_checkpoint_resume):
             run_sanity_checks(cfg, strict=bool(cfg_get(cfg, 'sanity.strict', False)))
         loaders = build_dataloaders(cfg)
-        model = MODEL_REGISTRY.build(str(cfg_get(cfg, 'model.name', 'mlp')), cfg_get(cfg, 'model'))
+        device = _resolve_device(cfg)
+        model = MODEL_REGISTRY.build(str(cfg_get(cfg, 'model.name', 'mlp')), cfg_get(cfg, 'model')).to(device)
+        model = wrap_model_for_distributed(model, device)
         task = build_task(cfg)
         optimizer = build_optimizer(model, cfg)
         scheduler = build_scheduler(cfg, optimizer, steps_per_epoch=len(loaders['train']))
@@ -99,7 +108,8 @@ def run(cfg: Any) -> None:
             save_top_k=int(cfg_get(cfg, 'checkpoint.save_top_k', 1)),
         )
 
-        trainer = Trainer(cfg, model, task, loaders, optimizer, scheduler, loggers, checkpoint_manager)
+        callbacks = build_callbacks(cfg)
+        trainer = Trainer(cfg, model, task, loaders, optimizer, scheduler, loggers, checkpoint_manager, callbacks)
         if mode == 'train':
             trainer.fit()
             if is_checkpoint_resume and trainer.trained_epochs == 0:
@@ -107,25 +117,118 @@ def run(cfg: Any) -> None:
                     'No new training epochs ran after resume; skipping test metrics and prediction export to avoid duplicate logs.'
                 )
                 return
-            test_metrics = trainer.test()
-        elif mode == 'eval':
-            trainer.resume()
-            evaluator = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision)
-            test_metrics = evaluator.evaluate(loaders['test'], prefix='test')
+            if not trainer.skip_test_after_train and 'test' in loaders:
+                loggers.log_metrics(trainer.test(), step=trainer.global_step)
+                _export_predictions(cfg, trainer, loaders, task)
+        elif mode == 'profile':
+            _profile_training(cfg, trainer)
         else:
-            raise ValueError(f'Unknown run.mode={mode}')
-
-        loggers.log_metrics(test_metrics, step=trainer.global_step)
-        prediction_limit = int(cfg_get(cfg, 'run.prediction_limit', 100))
-        pred_path = Path(str(cfg_get(cfg, 'run.prediction_dir', 'outputs/predictions'))) / 'test_predictions.json'
-        pred_path.parent.mkdir(parents=True, exist_ok=True)
-        records = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision).predict(
-            loaders['test'], limit=prediction_limit
-        )
-        pred_path.write_text(json.dumps(records, indent=2), encoding='utf-8')
+            if not is_checkpoint_resume:
+                logger.warning('run.mode=%s has no checkpoint.resume configured; using current model weights.', mode)
+            trainer.resume()
+            if mode in {'eval', 'test'} and 'test' in loaders:
+                loggers.log_metrics(trainer.test(), step=trainer.global_step)
+            if mode in {'eval', 'predict'}:
+                _export_predictions(cfg, trainer, loaders, task)
     finally:
         loggers.finish()
         cleanup_distributed()
+
+
+def _should_run_sanity(mode: str, is_checkpoint_resume: bool) -> bool:
+    return mode in {'train', 'profile'} and not (mode == 'train' and is_checkpoint_resume)
+
+
+def _resolve_device(cfg: Any) -> torch.device:
+    device = torch.device(cfg_get(cfg, 'run.device', cfg_get(cfg, 'device', 'cpu')))
+    if device.type == 'cuda' and not torch.cuda.is_available():
+        logging.getLogger('ml_template').warning('CUDA requested but unavailable; falling back to CPU')
+        device = torch.device('cpu')
+    return device
+
+
+def _export_predictions(cfg: Any, trainer: Trainer, loaders: dict[str, Any], task: Any) -> Path | None:
+    if 'test' not in loaders:
+        return None
+    prediction_limit = int(cfg_get(cfg, 'run.prediction_limit', 100))
+    pred_path = Path(str(cfg_get(cfg, 'run.prediction_dir', 'outputs/predictions'))) / 'test_predictions.json'
+    pred_path.parent.mkdir(parents=True, exist_ok=True)
+    records = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision).predict(
+        loaders['test'], limit=prediction_limit, limit_batches=trainer.limit_test_batches
+    )
+    pred_path.write_text(json.dumps(records, indent=2), encoding='utf-8')
+    logging.getLogger('ml_template').info('Wrote %s prediction records to %s', len(records), pred_path)
+    return pred_path
+
+
+def _profile_training(cfg: Any, trainer: Trainer) -> None:
+    """Run a short profiled training workload using the configured trainer stack."""
+    from torch.profiler import ProfilerActivity, profile, tensorboard_trace_handler
+
+    split = str(cfg_get(cfg, 'profiler.split', 'train'))
+    if split not in trainer.loaders:
+        available = ', '.join(sorted(trainer.loaders))
+        raise KeyError(f'Profiler split {split!r} not found. Available splits: {available}')
+    trace_dir = Path(str(cfg_get(cfg, 'run.profile_dir', cfg_get(cfg, 'profiler.trace_dir', 'outputs/profiles'))))
+    trace_dir.mkdir(parents=True, exist_ok=True)
+    warmup_steps = max(0, int(cfg_get(cfg, 'profiler.warmup_steps', 0)))
+    active_steps = max(1, int(cfg_get(cfg, 'profiler.active_steps', cfg_get(cfg, 'trainer.limit_train_batches', 1) or 1)))
+    backward = bool(cfg_get(cfg, 'profiler.backward', True))
+    batch_iter = _repeat_loader(trainer.loaders[split])
+
+    def run_step() -> None:
+        trainer.model.train()
+        batch = move_to_device(next(batch_iter), trainer.device)
+        trainer.optimizer.zero_grad(set_to_none=True)
+        with precision_autocast(trainer.device, trainer.precision):
+            result = trainer.task.step(trainer.model, batch, stage='profile')
+        if backward:
+            if result.loss is None:
+                raise RuntimeError('Profiler backward=true requires task.step(...) to return a loss')
+            trainer.scaler.scale(result.loss).backward()
+            trainer._prepare_gradients_for_step()
+            trainer.scaler.step(trainer.optimizer)
+            trainer.scaler.update()
+            trainer.global_step += 1
+        if trainer.device.type == 'cuda':
+            torch.cuda.synchronize()
+
+    for _ in range(warmup_steps):
+        run_step()
+
+    activities = [ProfilerActivity.CPU]
+    profile_cuda = bool(cfg_get(cfg, 'profiler.cuda', trainer.device.type == 'cuda')) and trainer.device.type == 'cuda'
+    if profile_cuda:
+        activities.append(ProfilerActivity.CUDA)
+
+    logger = logging.getLogger('ml_template')
+    logger.info(
+        'Profiling split=%s warmup_steps=%s active_steps=%s precision=%s trace_dir=%s',
+        split,
+        warmup_steps,
+        active_steps,
+        trainer.precision,
+        trace_dir,
+    )
+    with profile(
+        activities=activities,
+        on_trace_ready=tensorboard_trace_handler(str(trace_dir)),
+        record_shapes=bool(cfg_get(cfg, 'profiler.record_shapes', True)),
+        profile_memory=bool(cfg_get(cfg, 'profiler.profile_memory', False)),
+        with_stack=bool(cfg_get(cfg, 'profiler.with_stack', False)),
+        with_flops=bool(cfg_get(cfg, 'profiler.with_flops', False)),
+    ) as prof:
+        for _ in range(active_steps):
+            run_step()
+            prof.step()
+    sort_by = str(cfg_get(cfg, 'profiler.sort_by', 'cpu_time_total'))
+    row_limit = int(cfg_get(cfg, 'profiler.row_limit', 15))
+    logger.info('\n%s', prof.key_averages().table(sort_by=sort_by, row_limit=row_limit))
+
+
+def _repeat_loader(loader: Any) -> Any:
+    while True:
+        yield from loader
 
 
 @hydra.main(config_path='../configs', config_name='config', version_base='1.3')

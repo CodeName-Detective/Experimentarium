@@ -2,6 +2,8 @@
 
 # Number of training epochs.
 max_epochs: 5
+# Optional cap on optimizer/global steps across the full training run. Null disables the cap.
+max_steps: null
 # Number of batches to accumulate before each optimizer step.
 accumulate_grad_batches: 1
 # Gradient clipping norm. Set null to disable clipping.
@@ -10,6 +12,18 @@ grad_clip: 1.0
 log_every_n_steps: 10
 # Run validation every N epochs.
 val_every_n_epochs: 1
+# Run validation every N optimizer/global steps. Set 0 to disable step-based validation.
+val_every_n_steps: 0
+# Optional batch limits for fast debugging. Integers mean exact batches; floats in (0, 1] mean a fraction.
+limit_train_batches: null
+limit_val_batches: null
+limit_test_batches: null
+# Skip held-out test metrics and prediction export after train mode.
+skip_test_after_train: false
+# Add train/grad_norm to step metrics before clipping.
+log_gradient_norm: false
+# Add train/lr/group_<idx> to step metrics.
+log_learning_rate: false
 # Fail fast if loss becomes NaN or infinite.
 check_finite_loss: true
 # Enable torch.autograd anomaly detection for debugging backward failures.

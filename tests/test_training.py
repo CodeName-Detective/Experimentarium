@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 from src.data import build_dataloaders
@@ -65,3 +66,56 @@ def test_trainer_resume_at_max_epoch_runs_no_new_epochs(tmp_path, tiny_cfg):
     resumed.fit()
 
     assert resumed.trained_epochs == 0
+
+
+def test_trainer_honors_max_steps_and_logs_optional_step_metrics(tmp_path, tiny_cfg):
+    cfg = deepcopy(tiny_cfg)
+    cfg['checkpoint']['dir'] = str(tmp_path)
+    cfg['trainer']['max_steps'] = 1
+    cfg['trainer']['log_gradient_norm'] = True
+    cfg['trainer']['log_learning_rate'] = True
+    loaders = build_dataloaders(cfg)
+    model = MLP(cfg['model'])
+    task = build_task(cfg)
+    optimizer = build_optimizer(model, cfg)
+    scheduler = build_scheduler(cfg, optimizer, steps_per_epoch=len(loaders['train']))
+    trainer = Trainer(
+        cfg,
+        model,
+        task,
+        loaders,
+        optimizer,
+        scheduler,
+        LoggerCollection([NoopLogger()]),
+        CheckpointManager(tmp_path),
+    )
+
+    trainer.fit()
+
+    assert trainer.global_step == 1
+    assert trainer.trained_epochs == 1
+
+
+def test_trainer_integer_limit_train_batches_means_exact_batches(tmp_path, tiny_cfg):
+    cfg = deepcopy(tiny_cfg)
+    cfg['checkpoint']['dir'] = str(tmp_path)
+    cfg['trainer']['limit_train_batches'] = 1
+    loaders = build_dataloaders(cfg)
+    model = MLP(cfg['model'])
+    task = build_task(cfg)
+    optimizer = build_optimizer(model, cfg)
+    scheduler = build_scheduler(cfg, optimizer, steps_per_epoch=len(loaders['train']))
+    trainer = Trainer(
+        cfg,
+        model,
+        task,
+        loaders,
+        optimizer,
+        scheduler,
+        LoggerCollection([NoopLogger()]),
+        CheckpointManager(tmp_path),
+    )
+
+    trainer.fit()
+
+    assert trainer.global_step == 1

@@ -47,7 +47,9 @@ class LanguageModelingTask(BaseTask):
 
     def step(self, model: nn.Module, batch: dict[str, Any], stage: str) -> StepResult:
         """Compute flattened next-token cross-entropy and token metrics."""
+        self.validate_batch(batch, self.target_key)
         outputs = model(batch)
+        self.validate_outputs(outputs, self.output_key)
         logits = outputs[self.output_key]
         targets = batch[self.target_key].long()
         flat_logits, flat_targets = self._flatten(logits, targets)

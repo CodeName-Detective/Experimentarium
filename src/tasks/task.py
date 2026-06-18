@@ -50,6 +50,18 @@ class BaseTask:
         """Compute loss, outputs, and metric inputs for one batch."""
         raise NotImplementedError
 
+    def validate_batch(self, batch: dict[str, Any], *keys: str) -> None:
+        """Validate that a batch contains required keys."""
+        missing = [key for key in keys if key not in batch]
+        if missing:
+            raise KeyError(f'{type(self).__name__} batch missing required key(s): {missing}')
+
+    def validate_outputs(self, outputs: dict[str, Any], *keys: str) -> None:
+        """Validate that model outputs contain required keys."""
+        missing = [key for key in keys if key not in outputs]
+        if missing:
+            raise KeyError(f'{type(self).__name__} model output missing required key(s): {missing}')
+
     def reset_metrics(self) -> None:
         """Reset task metric state."""
         self.metrics.reset()
@@ -73,7 +85,9 @@ class ClassificationTask(BaseTask):
 
     def step(self, model: nn.Module, batch: dict[str, Tensor], stage: str) -> StepResult:
         """Run one classification step."""
+        self.validate_batch(batch, self.target_key)
         outputs = model(batch)
+        self.validate_outputs(outputs, self.output_key)
         logits = outputs[self.output_key]
         targets = batch[self.target_key].long()
         loss = outputs.get('loss')
@@ -101,7 +115,9 @@ class RegressionTask(BaseTask):
 
     def step(self, model: nn.Module, batch: dict[str, Tensor], stage: str) -> StepResult:
         """Run one regression step."""
+        self.validate_batch(batch, self.target_key)
         outputs = model(batch)
+        self.validate_outputs(outputs, self.output_key)
         preds = outputs[self.output_key]
         targets = batch[self.target_key].float()
         loss = outputs.get('loss')

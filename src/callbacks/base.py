@@ -4,8 +4,10 @@ Callbacks receive lifecycle events from the trainer and can add behavior such as
 custom visual logging, profiler ranges, extra checkpoint artifacts, exception
 reporting, or task-specific diagnostics.
 
-Copy a small example into your project and pass an instance to ``Trainer`` with
-``callbacks=[...]``. Current ``src/main.py`` does not build callbacks from config.
+Copy a small example into your project, register it with ``@register_callback``,
+and add it under the top-level ``callbacks:`` config list. ``src/main.py`` builds
+configured callbacks and passes them to ``Trainer``. Tests and custom scripts can
+still pass instances directly with ``callbacks=[...]``.
 
 Example: log the learning rate after each optimizer step.
 

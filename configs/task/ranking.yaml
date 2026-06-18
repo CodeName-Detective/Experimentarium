@@ -10,7 +10,10 @@ target_key: relevance
 # Default pointwise ranking objective; replace for pairwise or listwise ranking.
 loss:
   name: mse
-# Built-in pointwise score metrics.
+# Built-in pointwise and listwise ranking metrics.
 metrics:
   - mse
   - mae
+  - ndcg
+  - mrr
+  - precision_at_1

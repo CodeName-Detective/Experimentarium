@@ -19,6 +19,7 @@ import json
 import os
 import random
 import re
+import shutil
 import socket
 import time
 from pathlib import Path
@@ -27,7 +28,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from src.runtime.distributed import is_rank0
+from src.runtime.distributed import is_rank0, unwrap_model
 
 
 def get_rng_state(seed_cuda: bool | None = None) -> dict[str, Any]:
@@ -104,9 +105,9 @@ class CheckpointManager:
         state.setdefault('checkpoint_meta', self._checkpoint_meta(epoch=epoch, metric=metric, tag=tag))
         self._atomic_save(state, path)
         if self.save_last and tag is None:
-            self._atomic_save(state, self.last_path)
+            self._atomic_copy(path, self.last_path)
         if is_best:
-            self._atomic_save(state, self.best_path)
+            self._atomic_copy(path, self.best_path)
         self._record_manifest(path, epoch=epoch, metric=metric, is_best=is_best, tag=tag)
         self.rotate()
         return path
@@ -131,6 +132,14 @@ class CheckpointManager:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = path.with_suffix(path.suffix + '.tmp')
         torch.save(state, tmp_path)
+        with tmp_path.open('rb') as handle:
+            os.fsync(handle.fileno())
+        tmp_path.replace(path)
+
+    def _atomic_copy(self, source: Path, path: Path) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + '.tmp')
+        shutil.copyfile(source, tmp_path)
         with tmp_path.open('rb') as handle:
             os.fsync(handle.fileno())
         tmp_path.replace(path)
@@ -187,6 +196,64 @@ class CheckpointManager:
         if actual != expected:
             raise RuntimeError(f'Checkpoint checksum mismatch for {path}')
 
+    def _validate_checkpoint_path(self, path: Path) -> None:
+        if path.name == 'best.pt':
+            self._validate_selector_checksum(path, 'best')
+            return
+        if path.name == 'last.pt':
+            self._validate_selector_checksum(path, 'latest')
+            return
+        self._validate_checksum(path)
+
+    def _validate_selector_checksum(self, path: Path, selector: str) -> None:
+        manifest = self._read_manifest()
+        target_name = manifest.get(selector)
+        if not target_name:
+            return
+        entries = [
+            entry
+            for entry in manifest.get('checkpoints', [])
+            if entry.get('path') == target_name and entry.get('sha256')
+        ]
+        if not entries:
+            return
+        expected = entries[-1]['sha256']
+        actual = self._sha256(path)
+        if actual != expected:
+            raise RuntimeError(f'Checkpoint checksum mismatch for {path} ({selector} -> {target_name})')
+
+    def verify(self) -> list[str]:
+        """Validate manifest entries and best/last checkpoint selector files."""
+        issues: list[str] = []
+        manifest = self._read_manifest()
+        entries = manifest.get('checkpoints', [])
+        if not isinstance(entries, list):
+            return ['manifest checkpoints field is not a list']
+        for entry in entries:
+            name = entry.get('path')
+            expected = entry.get('sha256')
+            if not name:
+                issues.append('manifest entry missing path')
+                continue
+            path = self.directory / str(name)
+            if not path.exists():
+                issues.append(f'missing checkpoint: {path}')
+                continue
+            if expected and self._sha256(path) != expected:
+                issues.append(f'checksum mismatch: {path}')
+        for selector, selector_path in (('latest', self.last_path), ('best', self.best_path)):
+            target_name = manifest.get(selector)
+            if not target_name:
+                continue
+            if not selector_path.exists():
+                issues.append(f'missing selector file: {selector_path} ({selector} -> {target_name})')
+                continue
+            try:
+                self._validate_selector_checksum(selector_path, selector)
+            except RuntimeError as exc:
+                issues.append(str(exc))
+        return issues
+
     def candidate_paths(self) -> list[Path]:
         """Return checkpoint candidates newest-first, including manifest links."""
         candidates: list[Path] = []
@@ -235,10 +302,10 @@ class CheckpointManager:
     ) -> dict[str, Any]:
         """Load one checkpoint and restore any provided training objects."""
         path = Path(path)
-        if validate_checksum and path.name not in {'best.pt', 'last.pt'}:
-            self._validate_checksum(path)
+        if validate_checksum:
+            self._validate_checkpoint_path(path)
         state = torch.load(path, map_location='cpu', weights_only=False)
-        model.load_state_dict(state['model_state'], strict=strict_model)
+        unwrap_model(model).load_state_dict(state['model_state'], strict=strict_model)
         if optimizer is not None and state.get('optimizer_state') is not None:
             optimizer.load_state_dict(state['optimizer_state'])
         if scheduler is not None and state.get('scheduler_state') is not None:
