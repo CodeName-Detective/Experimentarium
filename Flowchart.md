@@ -9,6 +9,7 @@ flowchart TD
     User[User / Researcher]
 
     User --> UVTrain[uv run python src/main.py]
+    User --> ReplayTrain[uv run python src/main.py --config-file outputs/run_configs/run.yaml --run-id replay]
     User --> UVSanity[uv run python scripts/run_sanity.py]
     User --> ShellTrain[bash scripts/train.sh]
     User --> ShellEval[bash scripts/eval.sh CHECKPOINT]
@@ -22,6 +23,8 @@ flowchart TD
     ShellTrain --> Main[src/main.py]
     ShellEval --> Main
     UVTrain --> Main
+    ReplayTrain --> ReplayConfig[Load resolved YAML and scrub generated paths]
+    ReplayConfig --> Main
     ConsoleScripts --> Main
     MakeTargets --> Main
 
@@ -43,7 +46,7 @@ flowchart TD
 
 Notes:
 
-- `scripts/train.sh` is a thin wrapper around `uv run python src/main.py "$@"`.
+- `scripts/train.sh` is a thin wrapper around `uv run python src/main.py "$@"`; it can pass `--config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run` for replay.
 - `scripts/eval.sh` calls `src/main.py` with `run.mode=eval` and `checkpoint.resume=<path>`.
 - `scripts/run_sanity.py` only performs environment/config/smoke validation; it does not train.
 - `scripts/preprocess.sh` generates toy tensor-file data for `data=tensor_file`.
@@ -190,6 +193,7 @@ Key behavior:
 - `checkpoint.resume=latest` keeps the base id so checkpoint lookup targets the existing training run directory.
 - Evaluation preserves that id while changing `run.run_dir` to `outputs/evaluations/<run.id>/`.
 - `outputs/run_registry.jsonl` records both training and evaluation configs, artifact directories, repeat commands, and command working directories.
+- `src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run` replays a saved resolved config after regenerating runtime artifact paths.
 
 ## Registry And Component Flow
 

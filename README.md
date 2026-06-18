@@ -164,6 +164,15 @@ W&B receives the resolved config through `wandb.init(config=...)`, uses `run.tra
 
 Each `outputs/run_registry.jsonl` record includes a shell-safe `command` and `command_cwd`. Run that command from the recorded directory to repeat the same invocation. Sensitive CLI argument values are redacted in `command`, but avoid putting secrets in config values because the resolved config is also stored for reproducibility.
 
+You can also replay a resolved output config directly:
+
+```bash
+uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml
+uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run
+```
+
+`--config-file` is for fully resolved YAML snapshots such as `outputs/run_configs/<run_id>.yaml` or `outputs/evaluations/<run_id>/config.yaml`. Generated runtime paths and ids are regenerated before the run starts. Add `--run-id <id>`, `run.trial=...`, or `run.output_dir=...` after the file path when you want a distinct replay.
+
 ## Use This As A New Project Template
 
 1. Copy or clone the repository into your new project directory.
@@ -227,6 +236,10 @@ bash scripts/eval.sh outputs/runs/<run_id>/checkpoints/best.pt
 
 # Resume training from latest checkpoint in this config-derived run directory
 uv run python src/main.py checkpoint.resume=latest
+
+# Replay a saved resolved run config
+uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml
+uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run
 
 # Generate toy tensor-file data, then train from files
 bash scripts/preprocess.sh --force

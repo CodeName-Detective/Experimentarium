@@ -157,9 +157,9 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 
 ### `src/main.py`
 
-Hydra entrypoint for training and evaluation. It composes config, initializes runtime, seeds reproducibility, runs sanity checks, builds data/model/task/optimizer/scheduler/loggers/checkpoints, handles resume, and dispatches train or eval mode.
+Hydra entrypoint for training and evaluation. It composes config, initializes runtime, seeds reproducibility, runs sanity checks, builds data/model/task/optimizer/scheduler/loggers/checkpoints, handles resume, and dispatches train or eval mode. It also supports `--config-file <path>` to replay a fully resolved output config such as `outputs/run_configs/<run.id>.yaml`; use `--run-id <id>` to give the replay a specific run id.
 
-Use this as the primary executable for experiments.
+Use this as the primary executable for experiments. Use normal Hydra overrides for newly composed experiments and `--config-file` for replaying saved resolved configs.
 
 ### `src/__init__.py`
 
@@ -328,7 +328,7 @@ Run artifacts are isolated by a config-derived id instead of by timestamp. At st
 - `run.profile_dir`: `<run.run_dir>/profiles`.
 - `run.tracking_id`: `<run.id>` for training and `<run.id>_evaluation` for evaluation.
 
-Training config snapshots are stored at `outputs/run_configs/<run.id>.yaml`. Evaluation snapshots are stored at `outputs/evaluations/<run.id>/config.yaml`, which prevents evaluation from overwriting the training config. Both modes append metadata to `outputs/run_registry.jsonl`, including `command` and `command_cwd` for repeating the invocation. Sensitive CLI values are redacted in `command`, but resolved config values are still stored for reproducibility. If a fresh invocation reuses an existing artifact directory or config snapshot, `prepare_run` keeps that id and emits a warning; intentional training resumes suppress that warning. In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training checkpoint folder while all generated evaluation artifacts go to `outputs/evaluations/<run.id>/`.
+Training config snapshots are stored at `outputs/run_configs/<run.id>.yaml`. Evaluation snapshots are stored at `outputs/evaluations/<run.id>/config.yaml`, which prevents evaluation from overwriting the training config. Both modes append metadata to `outputs/run_registry.jsonl`, including `command` and `command_cwd` for repeating the invocation. Sensitive CLI values are redacted in `command`, but resolved config values are still stored for reproducibility. Replay a resolved snapshot with `uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml`; append `--run-id <id>` for a specific replay id or `run.trial=...` for a planned repeat. If a fresh invocation reuses an existing artifact directory or config snapshot, `prepare_run` keeps that id and emits a warning; intentional training resumes suppress that warning. In eval mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training checkpoint folder while all generated evaluation artifacts go to `outputs/evaluations/<run.id>/`.
 
 ## Generated And Ignored Paths
 

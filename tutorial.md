@@ -149,6 +149,15 @@ uv run python src/main.py +experiment=baseline run.trial=2
 uv run python src/main.py +experiment=baseline run.id=my_manual_run
 ```
 
+Replay from a saved resolved config:
+
+```bash
+uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml
+uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml --run-id replayed_run
+```
+
+Use `--config-file` with resolved output snapshots, not `configs/experiment/*.yaml`. The replay loader removes generated runtime paths and ids, then applies `--run-id` and any trailing `key=value` overrides so you can change the run id, trial, or output directory for a clean repeat.
+
 ## Tutorial 4: Use Hydra Overrides Correctly
 
 Hydra lets you modify config values from the command line.

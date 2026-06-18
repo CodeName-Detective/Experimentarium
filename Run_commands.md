@@ -699,6 +699,22 @@ Print the latest repeat command:
 uv run python -c "import json; print(json.loads(open('outputs/run_registry.jsonl', encoding='utf-8').read().splitlines()[-1])['command'])"
 ```
 
+Replay a saved resolved config snapshot:
+
+```bash
+uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml
+bash scripts/train.sh --config-file outputs/run_configs/<run.id>.yaml
+```
+
+Run a distinct planned replay from the same saved config:
+
+```bash
+uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml --run-id replayed_run
+uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml run.trial=2
+```
+
+Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides.
+
 ## Common Problems
 
 - `Could not find 'experiment/name'`: check the filename under
