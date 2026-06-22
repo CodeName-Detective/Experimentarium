@@ -14,7 +14,7 @@ For command-oriented usage, start with `README.md`.
 - `Description.md`: This file. Use it when you need to understand the repository layout or decide where a new feature belongs.
 - `tutorial.md`: Hands-on cookbook for learning the framework and customizing datasets, models, tasks, losses, metrics, optimizers, schedulers, logging, checkpoints, sanity checks, and scripts.
 - `Flowchart.md`: Mermaid diagrams covering every entrypoint, train/eval/sanity flow, artifact layout, registries, and customization edit points.
-- `pyproject.toml`: Python project metadata, dependency/version requirements used by sanity checks, optional extras, console scripts, and pytest settings. Edit this when renaming the project, adding dependencies, or changing package entrypoints.
+- `pyproject.toml`: Python project metadata, build metadata, dependency/version requirements used by sanity checks, optional extras, console scripts, and pytest settings. Edit this when renaming the project, adding dependencies, or changing package entrypoints.
 - `uv.lock`: Locked dependency graph for reproducible installs with `uv`. Update it after dependency changes if you keep the `uv` workflow. Don't change manually.
 - `ruff.toml`: Dedicated Ruff lint/format configuration. Edit this for line length, target Python version, selected rule families, and ignored rules.
 - `Makefile`: Shortcuts for common local commands: `install`, `sanity`, `train`, `eval`, `test`, `test-cov`, `lint`, `fmt`, and `clean`.

@@ -714,6 +714,13 @@ uv run python scripts/run_registry.py replay-command <run_id> --new-run-id repla
 uv run python scripts/run_registry.py diff <run_id_a> <run_id_b>
 ```
 
+Installed console-script equivalent:
+
+```bash
+uv run ml-run-registry list
+uv run ml-run-registry replay-command <run_id> --new-run-id replayed_run
+```
+
 Replay a saved resolved config snapshot:
 
 ```bash
@@ -733,6 +740,7 @@ Verify a checkpoint directory and selector checksums:
 
 ```bash
 uv run python scripts/verify_checkpoints.py outputs/runs/<run_id>/checkpoints
+uv run ml-verify-checkpoints outputs/runs/<run_id>/checkpoints
 ```
 
 Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides.

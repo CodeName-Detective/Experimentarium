@@ -317,7 +317,10 @@ class Trainer:
         return float(torch.linalg.vector_norm(torch.stack(norms), ord=2).item())
 
     def _learning_rate_metrics(self) -> dict[str, float]:
-        return {f'train/lr/group_{index}': float(group.get('lr', 0.0)) for index, group in enumerate(self.optimizer.param_groups)}
+        return {
+            f'train/lr/group_{index}': float(group.get('lr', 0.0))
+            for index, group in enumerate(self.optimizer.param_groups)
+        }
 
     def _should_run_step_validation(self) -> bool:
         return self.val_every_n_steps > 0 and self.global_step % self.val_every_n_steps == 0 and 'val' in self.loaders

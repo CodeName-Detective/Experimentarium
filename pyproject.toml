@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "Experimentarium"
 version = "0.1.0"
@@ -22,6 +26,12 @@ dependencies = [
   "torch-spline-conv==1.2.2+pt25cu121",
 ]
 
+[project.scripts]
+ml-train = "src.cli:train"
+ml-sanity = "src.cli:sanity"
+ml-run-registry = "scripts.run_registry:main"
+ml-verify-checkpoints = "scripts.verify_checkpoints:main"
+
 [project.optional-dependencies]
 tracking = [
   "tensorboard>=2.15",
@@ -36,6 +46,9 @@ dev = [
   "pytest-cov>=4",
   "ruff>=0.4",
 ]
+
+[tool.setuptools.packages.find]
+include = ["src*", "scripts*"]
 
 [tool.uv]
 environments = [

@@ -59,7 +59,7 @@ run:
   config_registry: outputs/run_registry.jsonl
   # Resolved to outputs/runs/<run.id> for training or outputs/evaluations/<run.id> for evaluation.
   run_dir: null
-  # External tracking id. Evaluation keeps run.id but uses <run.id>_evaluation to avoid merging tracker runs.
+  # External tracking id. Eval/test/predict keep run.id but use <run.id>_evaluation to avoid merging tracker runs.
   tracking_id: null
   # Directory for Python logs and JSONL/TensorBoard metrics; resolved under run.run_dir.
   log_dir: null

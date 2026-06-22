@@ -172,7 +172,9 @@ def _profile_training(cfg: Any, trainer: Trainer) -> None:
     trace_dir = Path(str(cfg_get(cfg, 'run.profile_dir', cfg_get(cfg, 'profiler.trace_dir', 'outputs/profiles'))))
     trace_dir.mkdir(parents=True, exist_ok=True)
     warmup_steps = max(0, int(cfg_get(cfg, 'profiler.warmup_steps', 0)))
-    active_steps = max(1, int(cfg_get(cfg, 'profiler.active_steps', cfg_get(cfg, 'trainer.limit_train_batches', 1) or 1)))
+    active_steps = max(
+        1, int(cfg_get(cfg, 'profiler.active_steps', cfg_get(cfg, 'trainer.limit_train_batches', 1) or 1))
+    )
     backward = bool(cfg_get(cfg, 'profiler.backward', True))
     batch_iter = _repeat_loader(trainer.loaders[split])
 

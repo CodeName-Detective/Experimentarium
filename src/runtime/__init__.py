@@ -15,7 +15,9 @@ from src.runtime.distributed import (
     mean_scalar,
     rank,
     setup_from_env,
+    unwrap_model,
     world_size,
+    wrap_model_for_distributed,
 )
 
 __all__ = [
@@ -28,5 +30,7 @@ __all__ = [
     'mean_scalar',
     'rank',
     'setup_from_env',
+    'unwrap_model',
     'world_size',
+    'wrap_model_for_distributed',
 ]

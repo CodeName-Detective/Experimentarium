@@ -49,7 +49,7 @@ def command_list(args: argparse.Namespace) -> None:
     for record in selected:
         config = record.get('config', {})
         mode = config.get('run', {}).get('mode', '') if isinstance(config, dict) else ''
-        print(f"{record.get('run_id', '')}	{mode}	{record.get('config_id', '')}	{record.get('run_dir', '')}")
+        print(f'{record.get("run_id", "")}	{mode}	{record.get("config_id", "")}	{record.get("run_dir", "")}')
 
 
 def command_show(args: argparse.Namespace) -> None:
@@ -110,7 +110,9 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = subparsers.add_parser('replay-command', help='Print a command that replays a saved resolved config')
     replay_parser.add_argument('run_id')
     replay_parser.add_argument('--new-run-id', help='Optional run id override for the replay')
-    replay_parser.add_argument('overrides', nargs='*', help='Optional key=value overrides appended to the replay command')
+    replay_parser.add_argument(
+        'overrides', nargs='*', help='Optional key=value overrides appended to the replay command'
+    )
     replay_parser.set_defaults(func=command_replay_command)
 
     diff_parser = subparsers.add_parser('diff', help='Print flattened config differences between two runs')
