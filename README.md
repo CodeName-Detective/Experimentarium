@@ -12,7 +12,7 @@ Use `README.md` for day-to-day usage, `Run_commands.md` for train/eval command r
 - Fault-tolerant checkpointing with atomic writes, manifest checksums, `last.pt`, `best.pt`, retention, resume, fallback loading, and exception checkpoints.
 - A canonical sanity-check command for validating a machine before running expensive training.
 - Toy classification, regression, sequence, and tensor-file workloads for smoke tests and examples.
-- Local scripts for training, evaluation, preprocessing, profiling, sanity checks, and W&B sweeps.
+- Local scripts for training, evaluation, preprocessing, profiling, sanity checks, run comparison, metric plotting, checkpoint export, run cleanup, and W&B sweeps.
 
 ## Quick Start
 
@@ -89,7 +89,7 @@ Run tests and lint:
 
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
-uv run ruff check src tests scripts/run_sanity.py scripts/run_registry.py scripts/verify_checkpoints.py
+uv run ruff check src tests scripts
 ```
 
 Train the default toy classification experiment:
@@ -164,14 +164,27 @@ W&B receives the resolved config through `wandb.init(config=...)`, uses `run.tra
 
 Each `outputs/run_registry.jsonl` record includes a shell-safe `command` and `command_cwd`. Run that command from the recorded directory to repeat the same invocation, or use `uv run python scripts/run_registry.py replay-command <run_id>` to print a replay command from the saved resolved config. Sensitive CLI argument values are redacted in `command`, but avoid putting secrets in config values because the resolved config is also stored for reproducibility.
 
-You can also replay a resolved output config directly:
+You can also replay or resume from saved run metadata directly:
 
 ```bash
 uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml
 uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run
+uv run python src/main.py --from-run <run_id> --run-id replayed_run
+uv run python src/main.py --resume-run <run_id>
 ```
 
-`--config-file` is for fully resolved YAML snapshots such as `outputs/run_configs/<run_id>.yaml` or `outputs/evaluations/<run_id>/config.yaml`. Generated runtime paths and ids are regenerated before the run starts. Add `--run-id <id>`, `run.trial=...`, or `run.output_dir=...` after the file path when you want a distinct replay.
+`--config-file` is for fully resolved YAML snapshots such as `outputs/run_configs/<run_id>.yaml` or `outputs/evaluations/<run_id>/config.yaml`. `--from-run <run_id>` finds that saved config from `outputs/run_registry.jsonl`; `--resume-run <run_id>` also sets `checkpoint.resume=latest` and keeps `run.id=<run_id>` unless you provide `--run-id <id>`. Generated runtime paths and ids are regenerated before the run starts. Add `--run-id <id>`, `run.trial=...`, or `run.output_dir=...` when you want a distinct replay.
+
+Common post-run utilities:
+
+```bash
+uv run ml-compare-runs --limit 5 --metrics val/loss val/accuracy
+uv run ml-plot-metrics <run_id> --metrics train/loss val/loss
+uv run ml-evaluate-run <run_id> --checkpoint best
+uv run ml-export-checkpoint <run_id> --checkpoint best --format state_dict
+uv run ml-cleanup-runs list --unsuccessful
+uv run ml-cleanup-runs cleanup --unsuccessful --archive-first --yes
+```
 
 ## Use This As A New Project Template
 
@@ -236,10 +249,20 @@ bash scripts/eval.sh outputs/runs/<run_id>/checkpoints/best.pt
 
 # Resume training from latest checkpoint in this config-derived run directory
 uv run python src/main.py checkpoint.resume=latest
+uv run python src/main.py --resume-run <run_id>
 
 # Replay a saved resolved run config
 uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml
 uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run
+uv run python src/main.py --from-run <run_id> --run-id replayed_run
+
+# Inspect, compare, plot, evaluate, export, and clean up previous runs
+uv run ml-run-registry replay-command <run_id> --new-run-id replayed_run
+uv run ml-compare-runs --limit 5 --metrics val/loss val/accuracy
+uv run ml-plot-metrics <run_id> --metrics train/loss val/loss
+uv run ml-evaluate-run <run_id> --checkpoint best
+uv run ml-export-checkpoint <run_id> --checkpoint best --format state_dict
+uv run ml-cleanup-runs list --unsuccessful
 
 # Generate toy tensor-file data, then train from files
 bash scripts/preprocess.sh --force
@@ -376,15 +399,17 @@ checkpoint:
   resume: null
 ```
 
-Resume options:
+Resume and evaluation options:
 
 ```bash
 uv run python src/main.py checkpoint.resume=latest
+uv run python src/main.py --resume-run <run_id>
 uv run python src/main.py checkpoint.resume=outputs/checkpoints/best.pt
 uv run python src/main.py run.mode=eval checkpoint.resume=latest
 uv run python src/main.py run.mode=eval checkpoint.resume=best
 uv run python src/main.py run.mode=eval checkpoint.resume=epoch_0005
 uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
+uv run ml-evaluate-run <run_id> --checkpoint best
 ```
 
 The checkpoint state includes model, optimizer, scheduler, scaler, RNG state, epoch, global step, best metric, and the composed config.
@@ -417,7 +442,7 @@ Run this before treating changes as reliable:
 
 ```bash
 python3 -m compileall src scripts tests
-uv run ruff check src tests scripts/run_sanity.py scripts/run_registry.py scripts/verify_checkpoints.py
+uv run ruff check src tests scripts
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
 uv run python scripts/run_sanity.py +experiment=sanity_cpu
 uv run python scripts/run_sanity.py +experiment=sanity_cpu sanity.check_all_experiments=true
@@ -437,7 +462,7 @@ uv run python src/main.py +experiment=ablation_heads trainer.max_epochs=1
 
 These are intentionally ignored and can be deleted at any time:
 
-- `outputs/`: run registry, resolved config snapshots, run-scoped checkpoints, logs, profiler traces, and prediction samples.
+- `outputs/`: run registry, resolved config snapshots, run-scoped checkpoints, logs, profiler traces, prediction samples, comparison reports, metric plots, checkpoint exports, and archives.
 - `data/processed/`: generated tensor-file toy splits from `scripts/preprocess.sh`.
 - `.venv/`: local virtual environment.
 - `.pytest_cache/`, `.ruff_cache/`, `.mypy_cache/`, `__pycache__/`: tool and Python caches.

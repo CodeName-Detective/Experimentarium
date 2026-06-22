@@ -42,10 +42,13 @@ from src.utils.logger import build_loggers
 from src.utils.paths import make_output_dirs
 from src.utils.registry import MODEL_REGISTRY
 from src.utils.run import prepare_run
+from src.utils.run_inspect import config_path_for_run
 from src.utils.sanity import bootstrap_registries, run_sanity_checks
 from src.utils.seed import setup_reproducibility
 
 _REPLAY_CONFIG_FLAGS = {'--config-file', '--run-config', '--replay-config'}
+_REPLAY_FROM_RUN_FLAGS = {'--from-run'}
+_RESUME_RUN_FLAGS = {'--resume-run'}
 _REPLAY_RUN_ID_FLAGS = {'--run-id', '--replay-run-id'}
 _GENERATED_REPLAY_PATHS = (
     'run.id',
@@ -240,10 +243,12 @@ def main(cfg: DictConfig) -> None:
 
 
 def run_from_config_file(argv: list[str] | None = None) -> None:
-    """Run from a resolved YAML config file plus optional dotlist overrides."""
+    """Run from a resolved YAML config file or saved run id plus optional overrides."""
     config_file, overrides = _extract_config_file_args(list(sys.argv[1:] if argv is None else argv))
     if config_file is None:
-        raise ValueError('Config-file mode requires --config-file <path>')
+        raise ValueError(
+            'Config-file mode requires --config-file <path>, --from-run <run_id>, or --resume-run <run_id>'
+        )
     cfg = load_replay_config(config_file, overrides)
     run(cfg)
 
@@ -270,24 +275,39 @@ def load_replay_config(config_file: str | Path, overrides: list[str] | None = No
 
 
 def _has_config_file_arg(argv: list[str]) -> bool:
-    return any(
-        arg in _REPLAY_CONFIG_FLAGS or any(arg.startswith(f'{flag}=') for flag in _REPLAY_CONFIG_FLAGS) for arg in argv
-    )
+    replay_flags = _REPLAY_CONFIG_FLAGS | _REPLAY_FROM_RUN_FLAGS | _RESUME_RUN_FLAGS
+    return any(arg in replay_flags or any(arg.startswith(f'{flag}=') for flag in replay_flags) for arg in argv)
 
 
 def _extract_config_file_args(argv: list[str]) -> tuple[str | None, list[str]]:
     config_file: str | None = None
+    source_run_id: str | None = None
+    resume_run_id: str | None = None
     replay_run_id: str | None = None
     remaining: list[str] = []
     idx = 0
     while idx < len(argv):
         arg = argv[idx]
         matched_config_flag = _match_flag(arg, _REPLAY_CONFIG_FLAGS)
+        matched_from_run_flag = _match_flag(arg, _REPLAY_FROM_RUN_FLAGS)
+        matched_resume_run_flag = _match_flag(arg, _RESUME_RUN_FLAGS)
         matched_run_id_flag = _match_flag(arg, _REPLAY_RUN_ID_FLAGS)
         if matched_config_flag is not None:
-            if config_file is not None:
-                raise ValueError('Only one replay config file can be supplied')
+            if config_file is not None or source_run_id is not None or resume_run_id is not None:
+                raise ValueError('Only one replay config source can be supplied')
             config_file, idx = _consume_flag_value(argv, idx, matched_config_flag, value_name='path')
+            continue
+        if matched_from_run_flag is not None:
+            if config_file is not None or source_run_id is not None or resume_run_id is not None:
+                raise ValueError('Only one replay config source can be supplied')
+            source_run_id, idx = _consume_flag_value(argv, idx, matched_from_run_flag, value_name='run id')
+            config_file = str(config_path_for_run(source_run_id))
+            continue
+        if matched_resume_run_flag is not None:
+            if config_file is not None or source_run_id is not None or resume_run_id is not None:
+                raise ValueError('Only one replay config source can be supplied')
+            resume_run_id, idx = _consume_flag_value(argv, idx, matched_resume_run_flag, value_name='run id')
+            config_file = str(config_path_for_run(resume_run_id))
             continue
         if matched_run_id_flag is not None:
             if replay_run_id is not None:
@@ -296,6 +316,11 @@ def _extract_config_file_args(argv: list[str]) -> tuple[str | None, list[str]]:
             continue
         remaining.append(arg)
         idx += 1
+    if resume_run_id is not None:
+        if replay_run_id is None:
+            replay_run_id = resume_run_id
+        if not any(override.startswith('checkpoint.resume=') for override in remaining):
+            remaining.append('checkpoint.resume=latest')
     if replay_run_id is not None:
         remaining.append(f'run.id={replay_run_id}')
     return config_file, remaining

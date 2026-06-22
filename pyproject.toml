@@ -30,6 +30,11 @@ dependencies = [
 ml-train = "src.cli:train"
 ml-sanity = "src.cli:sanity"
 ml-run-registry = "scripts.run_registry:main"
+ml-compare-runs = "scripts.compare_runs:main"
+ml-plot-metrics = "scripts.plot_metrics:main"
+ml-evaluate-run = "scripts.evaluate_run:main"
+ml-export-checkpoint = "scripts.export_checkpoint:main"
+ml-cleanup-runs = "scripts.cleanup_runs:main"
 ml-verify-checkpoints = "scripts.verify_checkpoints:main"
 
 [project.optional-dependencies]

@@ -9,7 +9,7 @@ flowchart TD
     User[User / Researcher]
 
     User --> UVTrain[uv run python src/main.py]
-    User --> ReplayTrain[uv run python src/main.py --config-file outputs/run_configs/run.yaml --run-id replay]
+    User --> ReplayTrain[uv run python src/main.py --config-file / --from-run / --resume-run]
     User --> UVSanity[uv run python scripts/run_sanity.py]
     User --> ShellTrain[bash scripts/train.sh]
     User --> ShellEval[bash scripts/eval.sh CHECKPOINT]
@@ -19,6 +19,7 @@ flowchart TD
     User --> ShellSweep[bash scripts/sweep.sh]
     User --> MakeTargets["make install / train / eval / sanity / test / lint"]
     User --> ConsoleScripts[ml-train / ml-sanity]
+    User --> RunUtilityCLIs["ml-run-registry / ml-compare-runs / ml-plot-metrics / ml-evaluate-run / ml-export-checkpoint / ml-cleanup-runs"]
 
     ShellTrain --> Main[src/main.py]
     ShellEval --> Main
@@ -27,6 +28,13 @@ flowchart TD
     ReplayConfig --> Main
     ConsoleScripts --> Main
     MakeTargets --> Main
+    RunUtilityCLIs --> RunRegistry[outputs/run_registry.jsonl]
+    RunUtilityCLIs --> RegistryTools[run registry, compare, plot, export, cleanup scripts]
+    RunUtilityCLIs --> EvaluateRunScript[scripts/evaluate_run.py]
+    RegistryTools --> Reports[outputs/reports or requested output path]
+    RegistryTools --> Exports[outputs/exports or requested output path]
+    RegistryTools --> Archives[outputs/archives]
+    EvaluateRunScript --> Main
 
     UVSanity --> SanityScript[scripts/run_sanity.py]
     ConsoleScripts --> SanityScript
@@ -51,6 +59,7 @@ Notes:
 - `scripts/run_sanity.py` only performs environment/config/smoke validation; it does not train.
 - `scripts/preprocess.sh` generates toy tensor-file data for `data=tensor_file`.
 - `scripts/profile.sh` loads `configs/profiler.yaml` and runs a small profiler workload outside the main trainer.
+- `scripts/run_registry.py`, `compare_runs.py`, `plot_metrics.py`, `evaluate_run.py`, `export_checkpoint.py`, and `cleanup_runs.py` read `outputs/run_registry.jsonl` to inspect, replay, evaluate, export, archive, or clean previous runs.
 - `scripts/sweep.sh` creates a W&B sweep from `configs/sweep.yaml`, then each W&B agent run calls `src/main.py`.
 - `Makefile` targets mostly forward to the same Python or shell entrypoints.
 
@@ -194,6 +203,9 @@ Key behavior:
 - Evaluation preserves that id while changing `run.run_dir` to `outputs/evaluations/<run.id>/`.
 - `outputs/run_registry.jsonl` records train/profile/eval/test/predict configs, artifact directories, repeat commands, and command working directories.
 - `src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run` replays a saved resolved config after regenerating runtime artifact paths.
+- `src/main.py --from-run <run_id>` resolves that saved config through `outputs/run_registry.jsonl`.
+- `src/main.py --resume-run <run_id>` resolves the saved config, sets `checkpoint.resume=latest` unless overridden, and keeps `run.id=<run_id>` by default.
+- Run utility scripts can compare final/best metrics, plot metric histories, evaluate the best checkpoint, export checkpoints, and dry-run or perform cleanup of failed/incomplete runs.
 
 ## Registry And Component Flow
 

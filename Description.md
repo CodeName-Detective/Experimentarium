@@ -7,7 +7,7 @@ For command-oriented usage, start with `README.md`.
 ## Root Files
 
 - `README.md`: Day-to-day usage guide. Use it when you want to install, sanity-check, train, evaluate, resume, extend, or validate the template.
-- `Run_commands.md`: Command cookbook for training, evaluation, resume, config overrides, shell wrappers, Makefile targets, profiling, preprocessing, and W&B sweeps.
+- `Run_commands.md`: Command cookbook for training, evaluation, resume, config overrides, shell wrappers, Makefile targets, profiling, preprocessing, run comparison, metric plotting, checkpoint export, run cleanup, and W&B sweeps.
 - `sanity_check_commands.md`: Command cookbook for machine/environment sanity checks, CUDA diagnostics, PyTorch install recommendations, and smoke-test controls.
 - `callback_tutorial.md`: Callback lifecycle reference with hook timing, direct and registry-based wiring, examples, distributed-training caveats, and testing guidance.
 - `profiler_tutorial.md`: Profiler guide covering when to profile, CPU/CUDA usage, TensorBoard traces, result interpretation, and optimization workflow.
@@ -148,7 +148,12 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 - `scripts/eval.sh`: Wrapper for checkpoint evaluation. First argument is the checkpoint path; extra arguments are Hydra overrides.
 - `scripts/preprocess.sh`: Generates toy tensor-file splits by calling `src/data/preprocess.py`.
 - `scripts/profile.sh`: Loads `configs/profiler.yaml`, runs the configured profiler workload, and writes traces to `profiler.trace_dir` (`outputs/profiles/` by default). Set `PROFILE_CUDA=1` or `profiler.cuda: true` to include CUDA profiling. See `profiler_tutorial.md` for interpreting traces and using profiler output to optimize code.
-- `scripts/run_registry.py`: Lists run registry records, prints original commands, prints replay commands from saved resolved configs, and diffs flattened configs.
+- `scripts/run_registry.py`: Lists run registry records, prints original commands, prints replay/resume commands from saved resolved configs, and diffs flattened configs.
+- `scripts/compare_runs.py`: Builds Markdown, CSV, or JSON comparison reports from registry records and JSONL metrics. Use it for side-by-side final/best metrics and selected config fields.
+- `scripts/plot_metrics.py`: Renders metric histories for one or more run ids as an HTML/SVG report plus a tidy CSV file.
+- `scripts/evaluate_run.py`: Evaluates, tests, or predicts from a saved run id and checkpoint selector by resolving the saved config from the registry.
+- `scripts/export_checkpoint.py`: Exports a run checkpoint as model-only state dict, full checkpoint copy, or best-effort TorchScript trace.
+- `scripts/cleanup_runs.py`: Lists, archives, and deletes selected run directories, including failed, incomplete, and missing runs via `--unsuccessful`.
 - `scripts/verify_checkpoints.py`: Verifies checkpoint manifest entries and `best.pt`/`last.pt` selector checksums.
 - `scripts/sweep.sh`: Creates and runs a W&B sweep from `configs/sweep.yaml`.
 - `scripts/__init__.py`: Makes `scripts.run_sanity:main` importable as the `ml-sanity` console script from `pyproject.toml`.
@@ -159,9 +164,9 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 
 ### `src/main.py`
 
-Hydra entrypoint for training, evaluation, test-only metrics, prediction-only export, and trainer-level profiling. It composes config, initializes runtime/DDP, seeds reproducibility, runs sanity checks when appropriate, builds data/model/task/optimizer/scheduler/loggers/checkpoints/callbacks, handles resume, and dispatches `run.mode=train|eval|test|predict|profile`. It also supports `--config-file <path>` to replay a fully resolved output config such as `outputs/run_configs/<run.id>.yaml`; use `--run-id <id>` to give the replay a specific run id.
+Hydra entrypoint for training, evaluation, test-only metrics, prediction-only export, and trainer-level profiling. It composes config, initializes runtime/DDP, seeds reproducibility, runs sanity checks when appropriate, builds data/model/task/optimizer/scheduler/loggers/checkpoints/callbacks, handles resume, and dispatches `run.mode=train|eval|test|predict|profile`. It also supports `--config-file <path>` to replay a fully resolved output config such as `outputs/run_configs/<run.id>.yaml`, `--from-run <run_id>` to find that config through the run registry, and `--resume-run <run_id>` to resume a previous run with `checkpoint.resume=latest`; use `--run-id <id>` to give a replay a specific run id.
 
-Use this as the primary executable for experiments. Use normal Hydra overrides for newly composed experiments and `--config-file` for replaying saved resolved configs.
+Use this as the primary executable for experiments. Use normal Hydra overrides for newly composed experiments, `--config-file` or `--from-run` for replaying saved resolved configs, and `--resume-run` for continuing an existing run by id.
 
 ### `src/__init__.py`
 
@@ -268,6 +273,7 @@ Shared framework utilities.
 - `src/utils/types.py`: Shared type aliases and protocols for batches, config dictionaries, model-like objects, datasets, metrics, and schedulers.
 - `src/utils/checkpoint.py`: Fault-tolerant checkpoint manager, RNG state capture/restore, atomic saves, manifest checksums, latest/best lookup, `best.pt`/`last.pt` selector verification, DDP-safe save/load, fallback loading, and legacy save/load helpers.
 - `src/utils/run.py`: Config-derived run identity helper. Computes `run.id`, writes resolved config snapshots, appends repeat-command metadata to `outputs/run_registry.jsonl`, and rewrites artifact paths under `outputs/runs/<run.id>/` for training/profile or `outputs/evaluations/<run.id>/` for eval/test/predict.
+- `src/utils/run_inspect.py`: Shared inspection helpers for run-registry tools, including run-id config lookup, checkpoint selector resolution, metrics loading, status classification, and command-cwd-aware path resolution.
 - `src/utils/paths.py`: Output, checkpoint, log, and prediction path helpers.
 - `src/utils/logger.py`: Console, JSONL, TensorBoard, and W&B logger backends plus logger collection setup.
 - `src/utils/__init__.py`: Utility package marker.
@@ -298,6 +304,7 @@ The old top-level `src/utils/sanity_check.py` file was removed. New and existing
 - `tests/test_training.py`: Trainer smoke tests.
 - `tests/test_checkpoint.py`: Checkpoint save/load/resume/fault-tolerance tests.
 - `tests/test_run_identity.py`: Stable run-id, training/evaluation output layout, config snapshot, selector, and tracking-id checks.
+- `tests/test_run_tools.py`: Run-registry tooling checks for replay lookup, comparison reports, metric plotting, failed-run selection, and checkpoint export.
 - `tests/test_metrics.py`: Metric correctness tests.
 - `tests/test_tasks.py`: Registration, loss, metric, prediction, detection filtering, and nested-device-transfer checks for task implementations.
 - `tests/test_schedulers.py`: Scheduler factory and behavior tests.
@@ -332,13 +339,13 @@ Run artifacts are isolated by a config-derived id instead of by timestamp. At st
 - `run.profile_dir`: `<run.run_dir>/profiles`.
 - `run.tracking_id`: `<run.id>` for train/profile and `<run.id>_evaluation` for eval/test/predict.
 
-Training config snapshots are stored at `outputs/run_configs/<run.id>.yaml`. Eval/test/predict snapshots are stored at `outputs/evaluations/<run.id>/config.yaml`, which prevents evaluation artifacts from overwriting the training config. All modes append metadata to `outputs/run_registry.jsonl`, including `command` and `command_cwd` for repeating the invocation. Sensitive CLI values are redacted in `command`, but resolved config values are still stored for reproducibility. Replay a resolved snapshot with `uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml`; append `--run-id <id>` for a specific replay id or `run.trial=...` for a planned repeat. If a fresh invocation reuses an existing artifact directory or config snapshot, `prepare_run` keeps that id and emits a warning; intentional training resumes suppress that warning. In eval/test/predict mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training checkpoint folder while generated evaluation artifacts go to `outputs/evaluations/<run.id>/`.
+Training config snapshots are stored at `outputs/run_configs/<run.id>.yaml`. Eval/test/predict snapshots are stored at `outputs/evaluations/<run.id>/config.yaml`, which prevents evaluation artifacts from overwriting the training config. All modes append metadata to `outputs/run_registry.jsonl`, including `command` and `command_cwd` for repeating the invocation. Sensitive CLI values are redacted in `command`, but resolved config values are still stored for reproducibility. Replay a resolved snapshot with `uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml` or `uv run python src/main.py --from-run <run.id>`; append `--run-id <id>` for a specific replay id or `run.trial=...` for a planned repeat. Resume an existing run by id with `uv run python src/main.py --resume-run <run.id>`. If a fresh invocation reuses an existing artifact directory or config snapshot, `prepare_run` keeps that id and emits a warning; intentional training resumes suppress that warning. In eval/test/predict mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training checkpoint folder while generated evaluation artifacts go to `outputs/evaluations/<run.id>/`.
 
 ## Generated And Ignored Paths
 
 These paths are not part of the framework source and can be deleted safely:
 
-- `outputs/`: Generated run registry, resolved config snapshots, run-scoped logs, checkpoints, profiler traces, and predictions.
+- `outputs/`: Generated run registry, resolved config snapshots, run-scoped logs, checkpoints, profiler traces, predictions, comparison reports, metric plots, checkpoint exports, and archives.
 - `data/processed/`: Generated tensor-file data from `scripts/preprocess.sh`.
 - `data/raw/`: Optional raw data location, ignored by default.
 - `.venv/`, `venv/`, `env/`: Local virtual environments.

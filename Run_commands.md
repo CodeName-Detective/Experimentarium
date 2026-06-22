@@ -3,7 +3,7 @@
 This file is the command reference for running the framework after the
 environment sanity checks pass. It covers training, evaluation, test, prediction,
 resume, config overrides, shell wrappers, Makefile shortcuts, profiling,
-preprocessing, run-registry inspection, checkpoint verification, and tracking workflows.
+preprocessing, run-registry inspection, run comparison, metric plotting, checkpoint export, run cleanup, checkpoint verification, and tracking workflows.
 
 Use `sanity_check_commands.md` before this file when validating a new machine.
 
@@ -210,6 +210,17 @@ uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=e
 
 These evaluate the latest/last checkpoint, best checkpoint, or epoch-5 checkpoint from the resolved training run and write results to `outputs/evaluations/<run_id>/`.
 
+### Evaluate A Saved Run Id
+
+```bash
+uv run python scripts/evaluate_run.py <run_id> --checkpoint best
+uv run python scripts/evaluate_run.py <run_id> --checkpoint latest --mode test
+uv run python scripts/evaluate_run.py <run_id> --checkpoint epoch_0005 --mode predict
+uv run ml-evaluate-run <run_id> --checkpoint best
+```
+
+This resolves `outputs/run_configs/<run_id>.yaml` from `outputs/run_registry.jsonl`, sets `run.mode`, and loads the selected checkpoint from `outputs/runs/<run_id>/checkpoints/`. Use `--print-only` to display the exact `src/main.py` command without executing it.
+
 ### Test-Only And Predict-Only Modes
 
 ```bash
@@ -256,6 +267,17 @@ uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<r
 These resume training from the selected checkpoint: latest/last, best, epoch 5, or an explicit checkpoint file. If no new epochs run, test logging is skipped to avoid duplicate tracking points.
 
 Use explicit checkpoint paths when you know exactly which run artifact you want.
+
+### Resume By Run Id
+
+```bash
+uv run python src/main.py --resume-run <run_id>
+uv run python src/main.py --resume-run <run_id> checkpoint.resume=best
+uv run python scripts/run_registry.py resume-command <run_id>
+uv run ml-run-registry resume-command <run_id>
+```
+
+`--resume-run <run_id>` loads the saved resolved config for that run id, adds `checkpoint.resume=latest` when you do not supply a checkpoint override, and keeps `run.id=<run_id>` by default. This is the shortest path for continuing an existing run without reconstructing the original Hydra overrides by hand.
 
 ## Config Override Patterns
 
@@ -711,6 +733,7 @@ uv run python scripts/run_registry.py list
 uv run python scripts/run_registry.py show <run_id>
 uv run python scripts/run_registry.py latest-command
 uv run python scripts/run_registry.py replay-command <run_id> --new-run-id replayed_run
+uv run python scripts/run_registry.py resume-command <run_id>
 uv run python scripts/run_registry.py diff <run_id_a> <run_id_b>
 ```
 
@@ -719,12 +742,14 @@ Installed console-script equivalent:
 ```bash
 uv run ml-run-registry list
 uv run ml-run-registry replay-command <run_id> --new-run-id replayed_run
+uv run ml-run-registry resume-command <run_id>
 ```
 
 Replay a saved resolved config snapshot:
 
 ```bash
 uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml
+uv run python src/main.py --from-run <run.id>
 bash scripts/train.sh --config-file outputs/run_configs/<run.id>.yaml
 ```
 
@@ -732,8 +757,60 @@ Run a distinct planned replay from the same saved config:
 
 ```bash
 uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml --run-id replayed_run
+uv run python src/main.py --from-run <run.id> --run-id replayed_run
 uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml run.trial=2
 ```
+
+
+## Post-Run Analysis And Cleanup
+
+Compare runs from registry records and JSONL metrics:
+
+```bash
+uv run python scripts/compare_runs.py <run_id_a> <run_id_b> --metrics val/loss val/accuracy
+uv run python scripts/compare_runs.py --limit 10 --format markdown --output outputs/reports/compare.md
+uv run ml-compare-runs --limit 10 --format csv --output outputs/reports/compare.csv
+```
+
+The comparison report includes status, selected config fields, final metric values, and best metric values. Best values use metric-name heuristics: losses and errors are minimized, accuracy-like metrics are maximized.
+
+Plot metric history as an HTML/SVG report plus a tidy CSV:
+
+```bash
+uv run python scripts/plot_metrics.py <run_id_a> <run_id_b> --metrics train/loss val/loss --output outputs/reports/loss.html
+uv run ml-plot-metrics <run_id> --metrics val/accuracy
+```
+
+Evaluate a saved run id from its best checkpoint:
+
+```bash
+uv run python scripts/evaluate_run.py <run_id> --checkpoint best
+uv run python scripts/evaluate_run.py <run_id> --checkpoint best --print-only
+uv run ml-evaluate-run <run_id> --checkpoint best
+```
+
+Export a checkpoint for sharing or deployment:
+
+```bash
+uv run python scripts/export_checkpoint.py <run_id> --checkpoint best --format state_dict
+uv run python scripts/export_checkpoint.py <run_id> --checkpoint best --format checkpoint
+uv run python scripts/export_checkpoint.py outputs/runs/<run_id>/checkpoints/best.pt --format state_dict --output outputs/exports/<run_id>/model.pt
+uv run ml-export-checkpoint <run_id> --checkpoint best --format state_dict
+```
+
+`state_dict` writes model weights plus minimal metadata. `checkpoint` copies the full training checkpoint. `torchscript` attempts to build the saved model/config and trace one train batch; use it only for model/data combinations that accept tensor-dict tracing cleanly.
+
+List, archive, or clean failed and incomplete runs:
+
+```bash
+uv run python scripts/cleanup_runs.py list --unsuccessful
+uv run python scripts/cleanup_runs.py cleanup --unsuccessful
+uv run python scripts/cleanup_runs.py cleanup --unsuccessful --archive-first --yes
+uv run python scripts/cleanup_runs.py archive <run_id> --output-dir outputs/archives
+uv run ml-cleanup-runs list --statuses failed incomplete missing
+```
+
+`cleanup` is dry-run by default. Pass `--yes` to delete selected run directories. `--unsuccessful` selects failed, incomplete, and missing runs; failed runs include exception checkpoints or train logs with tracebacks/errors. Add `--delete-config` only when you also want to remove the saved config snapshot.
 
 
 Verify a checkpoint directory and selector checksums:
@@ -743,7 +820,7 @@ uv run python scripts/verify_checkpoints.py outputs/runs/<run_id>/checkpoints
 uv run ml-verify-checkpoints outputs/runs/<run_id>/checkpoints
 ```
 
-Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides.
+Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides. `--from-run <run_id>` resolves the saved config through `outputs/run_registry.jsonl`; `--resume-run <run_id>` does the same and adds `checkpoint.resume=latest` plus `run.id=<run_id>` unless you override them.
 
 ## Common Problems
 

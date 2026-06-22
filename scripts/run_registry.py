@@ -80,6 +80,16 @@ def command_replay_command(args: argparse.Namespace) -> None:
     print(shlex.join(parts))
 
 
+def command_resume_command(args: argparse.Namespace) -> None:
+    """Print a command that resumes training from a saved run id."""
+    parts = ['uv', 'run', 'python', 'src/main.py', '--resume-run', args.run_id]
+    if args.checkpoint != 'latest':
+        parts.append(f'checkpoint.resume={args.checkpoint}')
+    if args.overrides:
+        parts.extend(args.overrides)
+    print(shlex.join(parts))
+
+
 def command_diff(args: argparse.Namespace) -> None:
     """Print flattened config differences between two runs."""
     records = read_records(args.registry)
@@ -114,6 +124,14 @@ def build_parser() -> argparse.ArgumentParser:
         'overrides', nargs='*', help='Optional key=value overrides appended to the replay command'
     )
     replay_parser.set_defaults(func=command_replay_command)
+
+    resume_parser = subparsers.add_parser('resume-command', help='Print a command that resumes a saved run')
+    resume_parser.add_argument('run_id')
+    resume_parser.add_argument('--checkpoint', default='latest', help='Checkpoint selector. Default: latest')
+    resume_parser.add_argument(
+        'overrides', nargs='*', help='Optional key=value overrides appended to the resume command'
+    )
+    resume_parser.set_defaults(func=command_resume_command)
 
     diff_parser = subparsers.add_parser('diff', help='Print flattened config differences between two runs')
     diff_parser.add_argument('left')
