@@ -19,13 +19,19 @@ Use `README.md` for day-to-day usage, `Run_commands.md` for train/eval command r
 If you keep `pyproject.toml`, use `uv sync` as the primary install path:
 
 ```bash
-uv sync --extra dev
+uv sync
 ```
 
-If you also need experiment tracking or vision packages:
+```bash
+uv sync --group dev
+```
 
 ```bash
-uv sync --extra dev --extra tracking --extra vision
+uv sync --extra dev --extra tracking
+```
+
+```bash
+uv sync --all-extras --group dev
 ```
 
 ## UV Dependency Install
