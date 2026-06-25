@@ -29,10 +29,16 @@ The framework is intentionally registry-based. Most customizations follow this p
 
 ## Tutorial 1: Install With UV
 
-Use this when you clone or copy the template to a new machine.
+Use this when you clone or copy the template to a new machine. The `dev` dependency group is included by default:
 
 ```bash
-uv sync --extra dev
+uv sync
+```
+
+Add the optional tracking packages when needed:
+
+```bash
+uv sync --extra tracking
 ```
 
 If you removed `pyproject.toml` in your copied project, install directly:
@@ -56,12 +62,12 @@ Validate:
 ```bash
 uv run python scripts/run_sanity.py +experiment=sanity_cpu
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
-uv run ruff check src tests scripts/run_sanity.py
+uv run ruff check src tests scripts
 ```
 
 ## Tutorial 2: Run The First Training Job
 
-Use this to confirm the train/eval loop works.
+Use this to confirm the normal training, validation, test, checkpoint, and prediction path works.
 
 ```bash
 uv run python src/main.py
@@ -90,73 +96,54 @@ What happens:
 
 ## Tutorial 3: Understand Run IDs And Outputs
 
-Every run writes artifacts under a config-derived id.
-
-Default layout:
+Fresh training uses a stable experiment id plus a code-managed trial:
 
 ```text
 outputs/
-  run_configs/<run.id>.yaml
+  run_configs/<run.id>/trial_<n>.yaml
   run_registry.jsonl
-  runs/<run.id>/
-    logs/train.log
-    logs/metrics.jsonl
-    logs/tensorboard/
-    checkpoints/epoch_0001.pt
-    checkpoints/last.pt
-    checkpoints/best.pt
-    checkpoints/manifest.json
-    predictions/test_predictions.json
-    profiles/
-  evaluations/<run.id>/
-    config.yaml
-    logs/train.log
-    logs/metrics.jsonl
-    logs/tensorboard/
-    predictions/test_predictions.json
+  runs/<run.id>/trial_<n>/
+    logs/
+    checkpoints/
+    predictions/
     profiles/
 ```
 
 Important behavior:
 
-- The base id is derived from `run.name`, model/data/task names, `run.trial`, and `run.config_id`.
-- If a fresh run would reuse an existing id, it keeps that id and emits a warning instead of creating `<base>_2` or `<base>_3`; intentional training resumes do not emit the reuse warning.
-- Repeated identical configs keep the same `run.config_id` and append artifacts under the same `run.id`.
-- In eval/test/predict mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training run checkpoint folder while preserving `run.id` and writing evaluation artifacts to `outputs/evaluations/<run.id>/`.
+- Fresh `run.id` is derived from `run.name`, model/data/task names, and `run.config_id`, unless you provide a manual stable id.
+- `run.trial_id` is not configured by the user. Repeating the same fresh config allocates the next trial automatically.
+- Fresh trials never append logs or checkpoints into an older fresh trial.
+- `run.tracking_id` and the W&B run name are generated from the same run/trial identity.
+- Every invocation begins with a bold cyan line showing run id, trial id, mode, and output path.
 
-Try it:
+Try two identical runs:
 
 ```bash
 uv run python src/main.py +experiment=sanity_cpu
 uv run python src/main.py +experiment=sanity_cpu
 ```
 
-Inspect:
+They share one stable run id and create `trial_1`, then `trial_2`.
+
+Use a manual stable id for fresh work when helpful:
 
 ```bash
-ls outputs/run_configs
-ls outputs/runs
-cat outputs/run_registry.jsonl
-# Print the latest repeat command
-# Run it from the recorded command_cwd.
-uv run python scripts/run_registry.py latest-command
-```
-
-Create planned repeats:
-
-```bash
-uv run python src/main.py +experiment=baseline run.trial=2
 uv run python src/main.py +experiment=baseline run.id=my_manual_run
 ```
 
-Replay from a saved resolved config:
+Replay and resume are different operations:
 
 ```bash
-uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml
-uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml --run-id replayed_run
+# Fresh replay: receives the next trial automatically.
+uv run python src/main.py --from-run <run.id>
+uv run python src/main.py --from-run <run.id> --run-id replayed_run
+
+# Intentional resume: continues the checkpoint's existing trial.
+uv run python src/main.py --resume-run <run.id>
 ```
 
-Use `--config-file` with resolved output snapshots, not `configs/experiment/*.yaml`. The replay loader removes generated runtime paths and ids, then applies `--run-id` and any trailing `key=value` overrides so you can change the run id, trial, or output directory for a clean repeat.
+Do not pass `--run-id` with `--resume-run`; resume identity is recovered from the checkpoint path.
 
 ## Tutorial 4: Use Hydra Overrides Correctly
 
@@ -269,11 +256,13 @@ Use these before adding your own dataset/model so you know the framework is heal
 
 ## Tutorial 7: Add A New Dataset
 
-Use this when your batch can be represented as a dictionary of tensors. The current task classes expect at least:
+Use this when your batch can be represented as a dictionary containing tensors or nested tensor structures. Models usually consume `batch['input']`; target keys are task-specific. Classification and regression use:
 
 ```python
 {'input': tensor, 'label': tensor}
 ```
+
+Segmentation uses `mask`, ranking uses `relevance`, language modeling uses `labels`, and detection commonly uses nested `targets`. Keep the selected data, model, and task contracts aligned.
 
 Edit `src/data/dataset.py` or add a new module under `src/data/` and import it from `src/data/__init__.py`.
 
@@ -649,6 +638,8 @@ Existing scheduler behavior:
 | `polynomial` | Polynomial decay over the configured horizon. |
 | `onecycle` | LR rises then falls during one run; usually batch-step based. |
 
+For horizon-based cosine and polynomial schedules, warmup steps are subtracted from the main schedule horizon. Schedulers with explicit durations keep their configured parameters. Warmup is not supported with `plateau`; scheduler construction rejects that combination. The explicit sanity command also reports it.
+
 Switch scheduler:
 
 ```bash
@@ -717,39 +708,39 @@ Notes:
 
 - `run.precision=fp32` uses the normal non-autocast path for train, validation, test, and prediction. `fp16`, `bf16`, and `amp` use CUDA autocast across both trainer and evaluator paths.
 - `detect_anomaly=true` is useful for debugging but slows training.
+- A final accumulation window with fewer batches is rescaled by its actual size before clipping and stepping.
+- Step-based validation restores model training mode and the in-progress training metric state before the next batch; logger steps remain monotonic because epoch summaries also use `global_step`.
 - `check_finite_loss=true` fails fast on NaN or Inf losses.
 
 ## Tutorial 16: Resume And Use Fault-Tolerant Checkpoints
 
-Checkpoint config lives in `configs/checkpoint/default.yaml`.
-
-Important files under each run:
+Checkpoint files live under one code-managed training trial:
 
 ```text
-outputs/runs/<run.id>/checkpoints/epoch_0001.pt
-outputs/runs/<run.id>/checkpoints/last.pt
-outputs/runs/<run.id>/checkpoints/best.pt
-outputs/runs/<run.id>/checkpoints/manifest.json
+outputs/runs/<run.id>/trial_<n>/checkpoints/epoch_0001.pt
+outputs/runs/<run.id>/trial_<n>/checkpoints/last.pt
+outputs/runs/<run.id>/trial_<n>/checkpoints/best.pt
+outputs/runs/<run.id>/trial_<n>/checkpoints/manifest.json
 ```
 
-Resume or evaluate from a checkpoint selector for the same config-derived run directory:
+Resume by saved run id or exact model path:
+
+```bash
+uv run python src/main.py --resume-run <run.id>
+uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run.id>/trial_<n>/checkpoints/last.pt
+```
+
+The explicit path supplies `run.id` and `trial_id`; the config hash does not choose resume identity. `--resume-run` resolves the latest training registry record to an explicit checkpoint path. It cannot be combined with `--run-id`.
+
+Selectors remain useful when the matching config identifies the desired run:
 
 ```bash
 uv run python src/main.py +experiment=baseline checkpoint.resume=latest
 uv run python src/main.py +experiment=baseline checkpoint.resume=best
 uv run python src/main.py +experiment=baseline checkpoint.resume=epoch_0005
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=latest
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=best
 ```
 
-Resume or evaluate from a specific checkpoint path:
-
-```bash
-uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run.id>/checkpoints/best.pt
-bash scripts/eval.sh outputs/runs/<run.id>/checkpoints/best.pt
-```
-
-Tune checkpoint policy:
+Checkpoint policy:
 
 ```yaml
 checkpoint:
@@ -762,88 +753,60 @@ checkpoint:
   mode: min
 ```
 
-Fault tolerance features already implemented:
-
-- Atomic checkpoint writes.
-- Manifest with checksums.
-- `last.pt` and `best.pt` convenience files.
-- Rotation by recent checkpoints and top-k best checkpoints.
-- Fallback loading if the newest checkpoint is corrupted.
-- Exception checkpointing when training raises.
-- RNG, optimizer, scheduler, AMP scaler, epoch, step, metric, and config state saved.
+`keep_last_k: 0` keeps all epoch files. `save_top_k: 0` disables `best.pt`. `save_last: false` disables `last.pt`. Training checkpoints use atomic writes, checksums, retention, exception saves, and full optimizer/scheduler/scaler/RNG/epoch/step state.
 
 ## Tutorial 17: Enable Logging, TensorBoard, And W&B
 
-Local logging is enabled by default:
+Local logging for a training trial:
 
 ```text
-outputs/runs/<run.id>/logs/train.log
-outputs/runs/<run.id>/logs/metrics.jsonl
+outputs/runs/<run.id>/trial_<n>/logs/train.log
+outputs/runs/<run.id>/trial_<n>/logs/metrics.jsonl
 ```
 
-Enable TensorBoard:
+Enable TensorBoard or W&B:
 
 ```bash
 uv sync --extra tracking
 uv run python src/main.py logging.tensorboard.enabled=true
 uv run tensorboard --logdir outputs/runs
-```
 
-Enable W&B:
-
-```bash
-uv sync --extra tracking
 uv run python src/main.py logging.wandb.enabled=true logging.wandb.project=my-project
 ```
 
-Recommended W&B config in `configs/logging/default.yaml` or an experiment file:
-
-```yaml
-logging:
-  wandb:
-    enabled: true
-    project: my-project
-    entity: null
-    tags: [baseline]
-    notes: first baseline
-    mode: online
-    run_name: null
-```
-
-Behavior:
-
-- If `logging.wandb.run_name` is null, the framework uses `run.tracking_id`: `run.id` for training and `<run.id>_evaluation` for evaluation.
-- W&B receives the fully resolved config through `wandb.init(config=...)`.
-- The resolved config snapshot is also logged as a W&B artifact.
-- Logging is rank-zero only to avoid duplicate DDP logs.
+W&B project/entity/tags/notes/mode remain configurable. W&B run ids and names do not: the framework generates `<run.id>-trial-<n>` for train/profile and `<run.id>-trial-<source_trial>-<mode>-<checkpoint>` for eval/test/predict. W&B receives the resolved config and config artifact; all logging is rank-zero only.
 
 ## Tutorial 18: Run Evaluation And Export Predictions
 
-Run evaluation mode from a checkpoint:
+Use the saved training config and a checkpoint selector:
 
 ```bash
-uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run.id>/checkpoints/best.pt
+uv run ml-evaluate-run <run.id> --checkpoint best
+uv run ml-evaluate-run <run.id> --checkpoint last --mode test
+uv run ml-evaluate-run <run.id> --checkpoint epoch_0005 --mode predict
 ```
 
-Use the shell wrapper:
+The helper resolves the selected checkpoint to an explicit path. A direct equivalent is:
 
 ```bash
-bash scripts/eval.sh outputs/runs/<run.id>/checkpoints/best.pt
+uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run.id>/trial_<n>/checkpoints/best.pt
 ```
 
-Prediction output:
+For source trial 3 and `best.pt`, prediction output is:
 
 ```text
-outputs/evaluations/<run.id>/predictions/test_predictions.json
+outputs/evaluations/<run.id>/trial_3/eval_best/predictions/test_predictions.json
 ```
 
-Limit prediction records:
+`last.pt` and `epoch_0005.pt` use `eval_last/` and `eval_epoch_0005/`. `test` and `predict` use corresponding `test_*` and `predict_*` folders. Repeating the same source-trial/mode/checkpoint evaluation removes and recreates that exact folder and logs a bold red warning; other evaluated checkpoints remain untouched.
+
+Limit exported records:
 
 ```bash
-uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run.id>/checkpoints/best.pt run.prediction_limit=20
+uv run ml-evaluate-run <run.id> --checkpoint best run.prediction_limit=20
 ```
 
-To customize prediction records, override `predict_records` in your task class.
+`run.mode=test` logs held-out metrics, `predict` exports predictions, and `eval` does both.
 
 ## Tutorial 19: Run Sanity Checks On A New Machine
 
@@ -877,7 +840,7 @@ What sanity checks:
 
 - Python version.
 - Required package versions from `pyproject.toml` when present.
-- Optional tracking/vision packages as warnings.
+- Optional packages from `[project.optional-dependencies]` as warnings; in this repository that is the `tracking` extra.
 - Required config keys from `configs/sanity/default.yaml`.
 - Runtime CPU/CUDA/DDP visibility, including PyTorch CUDA build and NVIDIA driver compatibility.
 - Output/checkpoint/log/prediction directory writability.
@@ -889,6 +852,7 @@ What sanity checks:
 CUDA compatibility report fields include `torch.__version__`, `torch.version.cuda`, `nvidia-smi` driver details when available, the known minimum NVIDIA driver for the PyTorch CUDA build, `torch.cuda.is_available()`, and any captured PyTorch CUDA initialization warning. If you enable `sanity.torch_install.recommend=true`, sanity also prints recommended UV and pip commands using the Python requirement in `pyproject.toml`, the detected GPU/driver from `nvidia-smi`, and the known official PyTorch wheel indexes. This mode is intended to work before torch is installed. If you see a warning like `driver on your system is too old`, either update the NVIDIA driver or install a PyTorch build compiled for an older CUDA version supported by your driver.
 
 Customize `configs/sanity/default.yaml` when your project needs additional required config keys or stricter machine checks. Set `sanity.cuda.check_driver=false` to skip CUDA driver checks, or `sanity.cuda.fail_on_cpu_mismatch=true` when you want CUDA/PyTorch mismatches to fail even in CPU-mode sanity.
+Strict mode is enabled by default for the explicit sanity command. Normal fresh training, resume, profile, eval, test, and predict workflows do not run this suite. The sanity smoke test uses `run.precision` and performs one optimizer and scheduler step; it reports invalid precision names, invalid plateau scheduler intervals, and plateau-plus-warmup configurations.
 
 ## Tutorial 20: Profile A Tiny Workload
 
@@ -959,12 +923,18 @@ Create a callback class. See `callback_tutorial.md` for the complete hook refere
 
 ```python
 from src.callbacks import Callback
+from src.utils.config import cfg_get
 from src.utils.registry import register_callback
 
 
-@register_callback('learning_rate_logger')
-class LearningRateLogger(Callback):
+@register_callback('project_lr_logger')
+class ProjectLearningRateLogger(Callback):
+    def __init__(self, cfg) -> None:
+        self.every_n_steps = max(1, int(cfg_get(cfg, 'every_n_steps', 1)))
+
     def on_batch_end(self, trainer, batch_idx: int, metrics: dict[str, float]) -> None:
+        if trainer.global_step % self.every_n_steps != 0:
+            return
         learning_rate = float(trainer.optimizer.param_groups[0]['lr'])
         trainer.loggers.log_metrics({'train/lr': learning_rate}, step=trainer.global_step)
 ```
@@ -973,9 +943,11 @@ class LearningRateLogger(Callback):
 
 ```yaml
 callbacks:
-  - name: learning_rate_logger
+  - name: project_lr_logger
     every_n_steps: 10
 ```
+
+Use a registry key that is not already registered by `src/callbacks/common.py`.
 
 Minimal extension path:
 
@@ -1043,24 +1015,25 @@ bash scripts/my_workflow.sh trainer.max_epochs=3
 Optionally add a Makefile target:
 
 ```make
-my-workflow:
-	bash scripts/my_workflow.sh $(ARGS)
+my-workflow: bash scripts/my_workflow.sh $(ARGS)
 ```
 
 ## Tutorial 25: Add A Console Script
 
-If you keep `pyproject.toml`, add a script entrypoint:
+If you keep `pyproject.toml`, add a script entrypoint. Hydra-decorated script entrypoints should use the existing wrappers in `src/cli.py`:
 
 ```toml
 [project.scripts]
-ml-train = "src.main:main"
-ml-sanity = "scripts.run_sanity:main"
+ml-train = "src.cli:train"
+ml-sanity = "src.cli:sanity"
 ```
+
+Ordinary utility modules with a plain `main()` function can point directly to that function, for example `ml-run-registry = "scripts.run_registry:main"`.
 
 Then sync:
 
 ```bash
-uv sync --extra dev
+uv sync
 uv run ml-sanity +experiment=sanity_cpu
 ```
 
@@ -1074,7 +1047,7 @@ Current distributed support includes:
 - Rank helpers such as `is_rank0`, `rank`, and `world_size`.
 - Rank-zero-only checkpointing and logging.
 - Distributed dataloader samplers when a process group is initialized.
-- Distributed metric averaging in `Evaluator`.
+- Weighted distributed metric reduction across trainer/evaluator task metrics.
 - Broadcast of the rank-zero selected run id.
 
 The standard entrypoint wraps the model with `torch.nn.parallel.DistributedDataParallel` when launched with `torchrun`, and checkpoints unwrap the model state before saving/loading.
@@ -1090,6 +1063,8 @@ CUDA launch with `nccl`:
 ```bash
 uv run torchrun --nproc_per_node=2 src/main.py +experiment=baseline run.device=cuda data.batch_size=64
 ```
+
+Validation and test ranks process disjoint, non-padded dataset shards. Scalar metrics use weighted global reductions, prediction records are gathered, and only rank zero writes shared logs and prediction JSON.
 
 Keep custom callbacks rank-aware if they write files or call external services.
 
@@ -1156,7 +1131,7 @@ Full validation:
 
 ```bash
 python3 -m compileall src scripts tests
-uv run ruff check src tests scripts/run_sanity.py
+uv run ruff check src tests scripts
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
 uv run python scripts/run_sanity.py +experiment=sanity_cpu
 ```
@@ -1199,7 +1174,7 @@ W&B not logging:
 - Install tracking extras.
 - Set `logging.wandb.enabled=true`.
 - Check W&B login and `logging.wandb.mode`.
-- Look for a warning in `outputs/runs/<run.id>/logs/train.log`.
+- Look for a warning in `outputs/runs/<run.id>/trial_<n>/logs/train.log`.
 
 ## Tutorial 30: Decide Where A Change Belongs
 
@@ -1231,7 +1206,7 @@ Before trusting a customized repo, run:
 
 ```bash
 python3 -m compileall src scripts tests
-uv run ruff check src tests scripts/run_sanity.py
+uv run ruff check src tests scripts
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest -q
 uv run python scripts/run_sanity.py +experiment=sanity_cpu
 uv run python src/main.py +experiment=sanity_cpu
@@ -1246,10 +1221,10 @@ uv run python src/main.py +experiment=my_experiment trainer.max_epochs=1
 Then inspect:
 
 ```text
-outputs/run_configs/<run.id>.yaml
+outputs/run_configs/<run.id>/trial_<n>.yaml
 outputs/run_registry.jsonl
-outputs/runs/<run.id>/logs/train.log
-outputs/runs/<run.id>/logs/metrics.jsonl
-outputs/runs/<run.id>/checkpoints/manifest.json
-outputs/runs/<run.id>/predictions/test_predictions.json
+outputs/runs/<run.id>/trial_<n>/logs/train.log
+outputs/runs/<run.id>/trial_<n>/logs/metrics.jsonl
+outputs/runs/<run.id>/trial_<n>/checkpoints/manifest.json
+outputs/runs/<run.id>/trial_<n>/predictions/test_predictions.json
 ```

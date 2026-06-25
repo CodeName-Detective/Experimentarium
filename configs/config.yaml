@@ -29,9 +29,7 @@ defaults:
 run:
   # Human-readable experiment name used in the derived run id.
   name: default
-  # Repeat index included in the config hash. Change this for separate repeats of the same setup.
-  trial: 1
-  # Optional explicit base run id. Null means derive one from run.name, model/data/task, trial, and config hash.
+  # Optional stable experiment id. Null derives one from run.name, model/data/task, and the config hash.
   id: null
   # Execution mode consumed by src/main.py: train, eval, test, predict, or profile.
   mode: train
@@ -49,18 +47,16 @@ run:
   debug: false
   # Root directory for all generated run artifacts.
   output_dir: outputs
-  # Parent directory for run-specific artifact folders. prepare_run resolves run.run_dir under this path.
-  runs_dir: outputs/runs
-  # Parent directory for evaluation artifacts. Eval mode resolves run.run_dir to outputs/evaluations/<run.id>.
-  evaluations_dir: outputs/evaluations
-  # Directory storing one resolved config snapshot per run id.
-  config_dir: outputs/run_configs
-  # JSONL registry mapping each run id to its resolved config and artifact directory.
-  config_registry: outputs/run_registry.jsonl
-  # Resolved to outputs/runs/<run.id> for training or outputs/evaluations/<run.id> for evaluation.
+  # Optional parent for run-specific artifact folders. Null derives <run.output_dir>/runs.
+  runs_dir: null
+  # Optional evaluation parent. Null derives <run.output_dir>/evaluations.
+  evaluations_dir: null
+  # Optional config snapshot directory. Null derives <run.output_dir>/run_configs.
+  config_dir: null
+  # Optional JSONL registry path. Null derives <run.output_dir>/run_registry.jsonl.
+  config_registry: null
+  # Resolved to a training trial or a checkpoint-specific evaluation directory by prepare_run.
   run_dir: null
-  # External tracking id. Eval/test/predict keep run.id but use <run.id>_evaluation to avoid merging tracker runs.
-  tracking_id: null
   # Directory for Python logs and JSONL/TensorBoard metrics; resolved under run.run_dir.
   log_dir: null
   # Directory where evaluation prediction records are written; resolved under run.run_dir.
@@ -69,7 +65,7 @@ run:
   prediction_limit: 100
   # Directory where profiler traces are written by profiling workflows; resolved under run.run_dir.
   profile_dir: null
-  # Training configs use outputs/run_configs/<run.id>.yaml; evaluation configs live under run.run_dir/config.yaml.
+  # Training configs use outputs/run_configs/<run.id>/trial_<n>.yaml; evaluation configs live under run.run_dir.
   config_path: null
   # Stable hash of the effective config used to derive the base run id; filled by prepare_run.
   config_id: null

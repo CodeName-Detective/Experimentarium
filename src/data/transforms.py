@@ -24,7 +24,7 @@ def identity_transform(cfg: Any | None = None):
 def torchvision_train_transform(cfg: Any | None = None):
     """Build a common torchvision training transform."""
     try:
-        from torchvision import transforms
+        from torchvision import transforms  # type: ignore[import-untyped]
     except Exception as exc:  # pragma: no cover - depends on optional torchvision import health.
         raise ImportError('Install torchvision to use image transforms') from exc
     mean = cfg_get(cfg, 'mean', cfg_get(cfg, 'normalize.mean', (0.4914, 0.4822, 0.4465)))
@@ -43,7 +43,7 @@ def torchvision_train_transform(cfg: Any | None = None):
 def torchvision_val_transform(cfg: Any | None = None):
     """Build a common torchvision validation transform."""
     try:
-        from torchvision import transforms
+        from torchvision import transforms  # type: ignore[import-untyped]
     except Exception as exc:  # pragma: no cover - depends on optional torchvision import health.
         raise ImportError('Install torchvision to use image transforms') from exc
     mean = cfg_get(cfg, 'mean', cfg_get(cfg, 'normalize.mean', (0.4914, 0.4822, 0.4465)))

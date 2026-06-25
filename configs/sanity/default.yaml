@@ -1,8 +1,8 @@
 # Sanity-check policy used by scripts/run_sanity.py and src/main.py.
 # Python and package version requirements are read from pyproject.toml.
 
-# If true, failures raise immediately. If false, warnings are reported but execution can continue.
-strict: false
+# Fail the run immediately on hard preflight failures. Override false only for diagnostic-only checks.
+strict: true
 # Run a tiny model/loss/backward/optimizer/scheduler smoke test.
 run_model_smoke: true
 # Compose every configs/experiment/*.yaml preset during sanity checks.

@@ -76,6 +76,14 @@ class CheckpointManager:
         self.mode = mode
         self.save_last = bool(save_last)
         self.save_top_k = int(save_top_k)
+        if self.save_every <= 0:
+            raise ValueError('checkpoint.save_every must be greater than zero')
+        if self.keep_last_k < 0:
+            raise ValueError('checkpoint.keep_last_k must be non-negative')
+        if self.save_top_k < 0:
+            raise ValueError('checkpoint.save_top_k must be non-negative')
+        if self.mode not in {'min', 'max'}:
+            raise ValueError("checkpoint.mode must be 'min' or 'max'")
         self.best_path = self.directory / 'best.pt'
         self.last_path = self.directory / 'last.pt'
         self.manifest_path = self.directory / 'manifest.json'
@@ -104,9 +112,11 @@ class CheckpointManager:
         state = dict(state)
         state.setdefault('checkpoint_meta', self._checkpoint_meta(epoch=epoch, metric=metric, tag=tag))
         self._atomic_save(state, path)
+        if not self.save_last:
+            self.last_path.unlink(missing_ok=True)
         if self.save_last and tag is None:
             self._atomic_copy(path, self.last_path)
-        if is_best:
+        if is_best and self.save_top_k > 0:
             self._atomic_copy(path, self.best_path)
         self._record_manifest(path, epoch=epoch, metric=metric, is_best=is_best, tag=tag)
         self.rotate()
@@ -146,7 +156,7 @@ class CheckpointManager:
 
     def _record_manifest(self, path: Path, epoch: int, metric: float | None, is_best: bool, tag: str | None) -> None:
         manifest = self._read_manifest()
-        entries = manifest.setdefault('checkpoints', [])
+        entries = [entry for entry in manifest.setdefault('checkpoints', []) if entry.get('path') != path.name]
         entries.append({
             'path': path.name,
             'epoch': epoch,
@@ -158,8 +168,18 @@ class CheckpointManager:
             'sha256': self._sha256(path),
             'created_at': time.time(),
         })
-        manifest['latest'] = path.name
-        if is_best:
+        manifest['checkpoints'] = entries
+        if tag is None and self.save_last:
+            manifest['latest'] = path.name
+        elif not self.save_last:
+            manifest.pop('latest', None)
+        if self.save_top_k <= 0:
+            manifest.pop('best', None)
+            self.best_path.unlink(missing_ok=True)
+        if manifest.get('best') == path.name and not (is_best and self.save_top_k > 0):
+            manifest.pop('best', None)
+            self.best_path.unlink(missing_ok=True)
+        if is_best and self.save_top_k > 0:
             manifest['best'] = path.name
         manifest['updated_at'] = time.time()
         self._atomic_json(manifest, self.manifest_path)
@@ -298,6 +318,7 @@ class CheckpointManager:
         scheduler: Any | None = None,
         scaler: Any | None = None,
         strict_model: bool = True,
+        restore_rng: bool = True,
         validate_checksum: bool = True,
     ) -> dict[str, Any]:
         """Load one checkpoint and restore any provided training objects."""
@@ -312,7 +333,7 @@ class CheckpointManager:
             scheduler.load_state_dict(state['scheduler_state'])
         if scaler is not None and state.get('scaler_state') is not None:
             scaler.load_state_dict(state['scaler_state'])
-        if state.get('rng_state') is not None:
+        if restore_rng and state.get('rng_state') is not None:
             set_rng_state(state['rng_state'])
         return state
 
@@ -323,12 +344,15 @@ class CheckpointManager:
         scheduler: Any | None = None,
         scaler: Any | None = None,
         strict_model: bool = True,
+        restore_rng: bool = True,
     ) -> dict[str, Any] | None:
         """Load the newest valid checkpoint; skip corrupt candidates."""
         errors: list[str] = []
         for path in self.candidate_paths():
             try:
-                return self.load(path, model, optimizer, scheduler, scaler, strict_model=strict_model)
+                return self.load(
+                    path, model, optimizer, scheduler, scaler, strict_model=strict_model, restore_rng=restore_rng
+                )
             except Exception as exc:  # noqa: PERF203 - fallback must test each checkpoint independently.
                 errors.append(f'{path}: {exc}')
                 continue
@@ -344,9 +368,18 @@ class CheckpointManager:
         recent = set(sorted(ckpts, key=self._extract_epoch)[-self.keep_last_k :])
         topk = set(self._top_k_paths())
         keep = recent | topk
+        removed_names: set[str] = set()
         for path in ckpts:
             if path not in keep:
+                removed_names.add(path.name)
                 path.unlink(missing_ok=True)
+        if removed_names:
+            manifest = self._read_manifest()
+            manifest['checkpoints'] = [
+                entry for entry in manifest.get('checkpoints', []) if entry.get('path') not in removed_names
+            ]
+            manifest['updated_at'] = time.time()
+            self._atomic_json(manifest, self.manifest_path)
 
     def _top_k_paths(self) -> list[Path]:
         if self.save_top_k <= 0:

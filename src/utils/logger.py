@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from src.runtime.distributed import is_rank0
 from src.utils.config import cfg_get, config_to_dict
@@ -49,7 +49,7 @@ class ConsoleLogger:
     """Human-readable scalar logging through Python's logging module."""
 
     def __init__(self) -> None:
-        self.logger = logging.getLogger('ml_template')
+        self.logger = logging.getLogger(__name__)
 
     def log_metrics(self, metrics: dict[str, float], step: int | None = None) -> None:
         """Log scalar metrics to the process logger."""
@@ -167,7 +167,10 @@ class WandBLogger:
                 name=cfg_get(wandb_cfg, 'run_name', cfg_get(cfg, 'run.id', None)),
                 tags=list(cfg_get(wandb_cfg, 'tags', []) or []),
                 notes=str(cfg_get(wandb_cfg, 'notes', '') or ''),
-                mode=str(cfg_get(wandb_cfg, 'mode', 'online')),
+                mode=cast(
+                    "Literal['online', 'offline', 'disabled', 'shared']",
+                    str(cfg_get(wandb_cfg, 'mode', 'online')),
+                ),
                 config=resolved_config,
                 resume='allow',
             )
@@ -178,6 +181,7 @@ class WandBLogger:
                     type='config',
                     metadata={
                         'run_id': cfg_get(cfg, 'run.id', None),
+                        'trial_id': cfg_get(cfg, 'run.trial_id', None),
                         'tracking_id': tracking_id,
                         'config_id': cfg_get(cfg, 'run.config_id', None),
                     },
@@ -185,7 +189,7 @@ class WandBLogger:
                 artifact.add_file(str(config_path))
                 self.run.log_artifact(artifact)
         except Exception as exc:
-            logging.getLogger('ml_template').warning('W&B disabled after init failure: %s', exc)
+            logging.getLogger(__name__).warning('W&B disabled after init failure: %s', exc)
             self.enabled = False
             self.run = None
 
@@ -222,15 +226,24 @@ class WandBLogger:
 
 
 class LoggerCollection:
-    """Fan-out logger that forwards calls to all enabled backends."""
+    """Fan-out logger that isolates failures in optional backends."""
 
     def __init__(self, backends: list[LoggerBackend]) -> None:
         self.backends = backends
 
+    @staticmethod
+    def _call_backend(backend: LoggerBackend, operation: str, *args: Any, **kwargs: Any) -> None:
+        try:
+            getattr(backend, operation)(*args, **kwargs)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                'Logger %s failed to %s: %s', type(backend).__name__, operation.replace('_', ' '), exc
+            )
+
     def log_metrics(self, metrics: dict[str, float], step: int | None = None) -> None:
         """Forward scalar metrics to every backend."""
         for backend in self.backends:
-            backend.log_metrics(metrics, step=step)
+            self._call_backend(backend, 'log_metrics', metrics, step=step)
 
     def log_artifact(
         self,
@@ -241,12 +254,12 @@ class LoggerCollection:
     ) -> None:
         """Forward an artifact event to every backend."""
         for backend in self.backends:
-            backend.log_artifact(path, name, artifact_type, metadata)
+            self._call_backend(backend, 'log_artifact', path, name, artifact_type, metadata)
 
     def finish(self) -> None:
-        """Finish every configured backend."""
+        """Finish every configured backend, even if one backend fails."""
         for backend in self.backends:
-            backend.finish()
+            self._call_backend(backend, 'finish')
 
 
 def setup_python_logging(cfg: ConfigType) -> None:
@@ -254,7 +267,9 @@ def setup_python_logging(cfg: ConfigType) -> None:
     log_dir = Path(cfg_get(cfg, 'run.log_dir', cfg_get(cfg, 'log_dir', 'outputs/logs')))
     log_dir.mkdir(parents=True, exist_ok=True)
     level = logging.DEBUG if bool(cfg_get(cfg, 'run.debug', False)) else logging.INFO
-    handlers: list[logging.Handler] = [logging.StreamHandler(), logging.FileHandler(log_dir / 'train.log')]
+    handlers: list[logging.Handler] = (
+        [logging.StreamHandler(), logging.FileHandler(log_dir / 'train.log')] if is_rank0() else [logging.NullHandler()]
+    )
     logging.basicConfig(
         level=level,
         format='%(asctime)s %(levelname)s %(name)s: %(message)s',
@@ -262,7 +277,7 @@ def setup_python_logging(cfg: ConfigType) -> None:
         force=True,
     )
     logging.root.disabled = False
-    logger = logging.getLogger('ml_template')
+    logger = logging.getLogger(__name__)
     logger.disabled = False
     logger.setLevel(level)
 
@@ -277,7 +292,7 @@ def build_loggers(cfg: ConfigType) -> LoggerCollection:
         try:
             backends.append(TensorBoardLogger(cfg_get(cfg, 'logging.tensorboard.log_dir', 'outputs/logs/tensorboard')))
         except Exception as exc:
-            logging.getLogger('ml_template').warning('TensorBoard logger disabled: %s', exc)
+            logging.getLogger(__name__).warning('TensorBoard logger disabled: %s', exc)
     if bool(cfg_get(cfg, 'logging.wandb.enabled', cfg_get(cfg, 'wandb.use_wandb', False))):
         backends.append(WandBLogger(cfg))
     return LoggerCollection(backends)
@@ -307,7 +322,7 @@ def log_metrics(metrics: dict[str, float], step: int | None = None) -> None:
 
 def log_info(message: str) -> None:
     """Log an informational message through the framework logger."""
-    logging.getLogger('ml_template').info(message)
+    logging.getLogger(__name__).info(message)
 
 
 def finish() -> None:

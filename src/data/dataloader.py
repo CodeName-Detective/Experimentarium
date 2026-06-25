@@ -11,9 +11,10 @@ Typical usage:
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterator, Sized
+from typing import Any, cast
 
-from torch.utils.data import DataLoader, Dataset, DistributedSampler
+from torch.utils.data import DataLoader, Dataset, DistributedSampler, Sampler
 from torch.utils.data._utils.collate import default_collate
 
 from src.data.transforms import build_transform
@@ -25,9 +26,29 @@ from src.utils.seed import get_generator, seed_worker
 def _is_distributed() -> bool:
     try:
         import torch.distributed as dist
+
         return dist.is_available() and dist.is_initialized()
     except Exception:
         return False
+
+
+class DistributedEvalSampler(Sampler[int]):
+    """Shard evaluation data without padding or duplicating samples."""
+
+    def __init__(self, dataset: Dataset) -> None:
+        import torch.distributed as dist
+
+        self.dataset = dataset
+        self.dataset_size = len(cast(Sized, dataset))
+        self.num_replicas = dist.get_world_size()
+        self.rank = dist.get_rank()
+
+    def __iter__(self) -> Iterator[int]:
+        return iter(range(self.rank, self.dataset_size, self.num_replicas))
+
+    def __len__(self) -> int:
+        remaining = max(0, self.dataset_size - self.rank)
+        return (remaining + self.num_replicas - 1) // self.num_replicas
 
 
 class TransformDataset(Dataset):
@@ -39,7 +60,7 @@ class TransformDataset(Dataset):
         self._collate_fn = getattr(dataset, 'collate_fn', None)
 
     def __len__(self) -> int:
-        return len(self.dataset)
+        return len(cast(Sized, self.dataset))
 
     def __getitem__(self, index: int) -> Any:
         sample = self.dataset[index]
@@ -77,21 +98,24 @@ def build_dataloaders(cfg) -> dict[str, DataLoader]:
         requested_pin_memory = bool(_split_value(data_cfg, split, 'pin_memory', False))
         pin_memory = requested_pin_memory and device_name.startswith('cuda')
         shuffle = bool(_split_value(data_cfg, split, 'shuffle', split == 'train'))
-        sampler = DistributedSampler(dataset, shuffle=shuffle) if _is_distributed() else None
+        sampler = None
+        if _is_distributed():
+            sampler = (
+                DistributedSampler(dataset, shuffle=shuffle) if split == 'train' else DistributedEvalSampler(dataset)
+            )
         prefetch_factor = _limit_prefetch(num_workers, _split_value(data_cfg, split, 'prefetch_factor', None))
-        loader_kwargs = {
-            'batch_size': batch_size,
-            'shuffle': (shuffle and sampler is None),
-            'sampler': sampler,
-            'num_workers': num_workers,
-            'collate_fn': getattr(dataset, 'collate_fn', None),
-            'pin_memory': pin_memory,
-            'drop_last': bool(_split_value(data_cfg, split, 'drop_last', False) and split == 'train'),
-            'worker_init_fn': seed_worker if num_workers > 0 else None,
-            'generator': get_generator(seed) if sampler is None else None,
-            'persistent_workers': bool(_split_value(data_cfg, split, 'persistent_workers', False)) and num_workers > 0,
-        }
-        if prefetch_factor is not None:
-            loader_kwargs['prefetch_factor'] = prefetch_factor
-        loaders[split] = DataLoader(dataset, **loader_kwargs)
+        loaders[split] = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle and sampler is None,
+            sampler=sampler,
+            num_workers=num_workers,
+            collate_fn=getattr(dataset, 'collate_fn', None),
+            pin_memory=pin_memory,
+            drop_last=bool(_split_value(data_cfg, split, 'drop_last', False) and split == 'train'),
+            worker_init_fn=seed_worker if num_workers > 0 else None,
+            generator=get_generator(seed) if sampler is None else None,
+            persistent_workers=bool(_split_value(data_cfg, split, 'persistent_workers', False)) and num_workers > 0,
+            prefetch_factor=prefetch_factor,
+        )
     return loaders

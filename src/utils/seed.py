@@ -18,7 +18,7 @@ import torch
 try:
     import torch.distributed as dist
 except Exception:
-    dist = None
+    dist = None  # type: ignore[assignment]
 
 
 # =========================================================

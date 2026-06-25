@@ -6,11 +6,11 @@
 dir: outputs/checkpoints
 # Save an epoch checkpoint every N epochs.
 save_every: 1
-# Keep at most this many recent epoch checkpoints after rotation.
+# Keep at most this many recent epoch checkpoints after rotation. Set 0 to disable rotation and keep all epoch files.
 keep_last_k: 5
 # Maintain a last.pt pointer to the latest checkpoint.
 save_last: true
-# Number of best monitored checkpoints to retain. Set 0 to disable best retention.
+# Number of best monitored epoch files to retain. Set 0 to disable best.pt and best retention.
 save_top_k: 1
 # Save an emergency checkpoint if training raises an exception.
 save_on_exception: true

@@ -8,11 +8,15 @@ from typing import Any
 import torch
 
 _MIXED_PRECISIONS = {'amp', 'fp16', 'bf16'}
+SUPPORTED_PRECISIONS = {'fp32', *_MIXED_PRECISIONS}
 
 
 def normalize_precision(precision: Any) -> str:
-    """Normalize configured precision names."""
-    return str(precision or 'fp32').lower()
+    """Normalize and validate configured precision names."""
+    mode = str(precision or 'fp32').lower()
+    if mode not in SUPPORTED_PRECISIONS:
+        raise ValueError(f'Unsupported precision {mode!r}. Expected one of {sorted(SUPPORTED_PRECISIONS)}')
+    return mode
 
 
 def amp_dtype(precision: Any) -> torch.dtype:

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
 from src.losses import build_loss
+from src.runtime.distributed import reduce_sum_count
 from src.tasks.task import BaseTask, StepResult
 from src.utils.config import cfg_get
 from src.utils.registry import register_task
@@ -28,7 +29,7 @@ class LanguageModelingTask(BaseTask):
         self.loss_fn = build_loss(loss_cfg)
         self.ignore_index = int(cfg_get(cfg, 'ignore_index', cfg_get(loss_cfg, 'ignore_index', -100)))
         if hasattr(self.loss_fn, 'ignore_index'):
-            self.loss_fn.ignore_index = self.ignore_index
+            cast('Any', self.loss_fn).ignore_index = self.ignore_index
         self._nll_total = 0.0
         self._token_count = 0
 
@@ -44,6 +45,26 @@ class LanguageModelingTask(BaseTask):
         if self._token_count:
             metrics['perplexity'] = math.exp(min(self._nll_total / self._token_count, 80.0))
         return metrics
+
+    def compute_metrics_distributed(self, device: Any = 'cpu') -> dict[str, float]:
+        """Return token metrics and perplexity reduced by global token count."""
+        metrics = super().compute_metrics_distributed(device=device)
+        nll_total, token_count = reduce_sum_count(self._nll_total, self._token_count, device=device)
+        if token_count:
+            metrics['perplexity'] = math.exp(min(nll_total / token_count, 80.0))
+        return metrics
+
+    def metric_state_dict(self) -> dict[str, Any]:
+        """Snapshot generic and language-model metric accumulators."""
+        state = super().metric_state_dict()
+        state.update({'nll_total': self._nll_total, 'token_count': self._token_count})
+        return state
+
+    def load_metric_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore generic and language-model metric accumulators."""
+        super().load_metric_state_dict(state)
+        self._nll_total = float(state.get('nll_total', 0.0))
+        self._token_count = int(state.get('token_count', 0))
 
     def step(self, model: nn.Module, batch: dict[str, Any], stage: str) -> StepResult:
         """Compute flattened next-token cross-entropy and token metrics."""
@@ -62,7 +83,7 @@ class LanguageModelingTask(BaseTask):
             self.metrics.update(flat_logits[valid].detach(), flat_targets[valid].detach(), n=valid_count)
             self._nll_total += float(loss.detach().cpu()) * valid_count
             self._token_count += valid_count
-        return StepResult(loss=loss, outputs=outputs, targets=targets)
+        return StepResult(loss=loss, outputs=outputs, targets=targets, loss_weight=valid_count)
 
     def _flatten(self, logits: Tensor, targets: Tensor) -> tuple[Tensor, Tensor]:
         if logits.ndim != targets.ndim + 1:

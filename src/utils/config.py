@@ -16,8 +16,8 @@ from typing import Any
 try:
     from omegaconf import DictConfig, OmegaConf
 except Exception:  # pragma: no cover - fallback for minimal environments
-    DictConfig = None  # type: ignore[assignment]
-    OmegaConf = None  # type: ignore[assignment]
+    DictConfig = None  # type: ignore[misc, assignment]
+    OmegaConf = None  # type: ignore[misc, assignment]
 
 
 def cfg_get(obj: Any, key: str, default: Any = None) -> Any:
@@ -52,7 +52,7 @@ def load_config(path: str | Path) -> Any:
     """Load configuration data from a YAML file."""
     if OmegaConf is not None:
         return OmegaConf.load(path)
-    import yaml
+    import yaml  # type: ignore[import-untyped]
 
     with Path(path).open('r', encoding='utf-8') as handle:
         return yaml.safe_load(handle)

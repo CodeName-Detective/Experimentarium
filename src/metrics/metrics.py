@@ -160,6 +160,15 @@ class MetricAccumulator:
         self.total = 0.0
         self.count = 0
 
+    def state_dict(self) -> dict[str, float | int]:
+        """Return serializable accumulator state."""
+        return {'total': self.total, 'count': self.count}
+
+    def load_state_dict(self, state: dict[str, float | int]) -> None:
+        """Restore accumulator state."""
+        self.total = float(state.get('total', 0.0))
+        self.count = int(state.get('count', 0))
+
 
 @dataclass
 class MetricCollection:
@@ -185,6 +194,21 @@ class MetricCollection:
         """Reset every metric accumulator."""
         for metric in self.metrics.values():
             metric.reset()
+
+    def totals(self) -> dict[str, tuple[float, int]]:
+        """Return weighted numerators and denominators for distributed reduction."""
+        return {name: (metric.total, metric.count) for name, metric in self.metrics.items()}
+
+    def state_dict(self) -> dict[str, dict[str, float | int]]:
+        """Return serializable state for every metric."""
+        return {name: metric.state_dict() for name, metric in self.metrics.items()}
+
+    def load_state_dict(self, state: dict[str, dict[str, float | int]]) -> None:
+        """Restore state for metrics present in this collection."""
+        for name, metric_state in state.items():
+            metric = self.metrics.get(name)
+            if metric is not None:
+                metric.load_state_dict(metric_state)
 
 
 def compute_all_metrics(preds: Tensor, targets: Tensor) -> dict[str, float]:

@@ -9,7 +9,7 @@ output_key: detections
 target_key: targets
 # Detection models commonly return a dictionary of component losses directly.
 loss: null
-# Structured detection metrics computed by DetectionTask.
+# Dataset-level detection metrics computed across all images by DetectionTask.
 metrics:
   - map50
 # Score threshold used by the detection task when exporting predictions.

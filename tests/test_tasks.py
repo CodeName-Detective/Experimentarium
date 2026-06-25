@@ -208,3 +208,82 @@ def test_task_schema_validation_reports_missing_batch_key():
 
     with pytest.raises(KeyError, match='missing required key'):
         task.step(StaticOutputModel({'logits': torch.randn(1, 2)}), {'input': torch.randn(1, 4)}, stage='train')
+
+
+def test_segmentation_metrics_use_dataset_confusion_matrix():
+    task = SegmentationTask({
+        'output_key': 'logits',
+        'target_key': 'mask',
+        'loss': {'name': 'cross_entropy'},
+        'metrics': ['accuracy', 'iou', 'dice'],
+    })
+    first_logits = torch.tensor([[[[5.0]], [[0.0]]]], requires_grad=True)
+    task.step(StaticOutputModel({'logits': first_logits}), {'mask': torch.tensor([[[0]]])}, stage='val')
+    second_logits = (
+        torch
+        .stack([
+            torch.full((3, 3), 5.0),
+            torch.zeros((3, 3)),
+        ])
+        .unsqueeze(0)
+        .requires_grad_()
+    )
+    task.step(
+        StaticOutputModel({'logits': second_logits}),
+        {'mask': torch.ones((1, 3, 3), dtype=torch.long)},
+        stage='val',
+    )
+
+    metrics = task.compute_metrics()
+
+    assert metrics['accuracy'] == pytest.approx(0.1)
+    assert metrics['iou'] == pytest.approx(0.05)
+    assert metrics['dice'] == pytest.approx(1.0 / 11.0)
+
+
+def test_segmentation_distributed_metrics_use_gathered_confusion(monkeypatch):
+    task = SegmentationTask({
+        'output_key': 'logits',
+        'target_key': 'mask',
+        'loss': {'name': 'cross_entropy'},
+        'metrics': ['accuracy', 'iou', 'dice'],
+    })
+    local = torch.tensor([[1.0, 0.0], [0.0, 0.0]], dtype=torch.float64)
+    remote = torch.tensor([[0.0, 0.0], [9.0, 0.0]], dtype=torch.float64)
+    task._confusion = local
+    monkeypatch.setattr('src.tasks.segmentation.all_gather_objects', lambda value: [value, remote])
+
+    metrics = task.compute_metrics_distributed()
+
+    assert metrics['accuracy'] == pytest.approx(0.1)
+    assert metrics['iou'] == pytest.approx(0.05)
+    assert metrics['dice'] == pytest.approx(1.0 / 11.0)
+
+
+def test_detection_map50_is_computed_across_the_dataset():
+    task = DetectionTask({'output_key': 'detections', 'target_key': 'targets', 'metrics': ['map50']})
+    target = {'boxes': torch.tensor([[0.0, 0.0, 2.0, 2.0]]), 'labels': torch.tensor([1])}
+    first = {
+        'detections': [
+            {
+                'boxes': torch.tensor([[0.0, 0.0, 2.0, 2.0]]),
+                'scores': torch.tensor([0.9]),
+                'labels': torch.tensor([1]),
+            }
+        ]
+    }
+    second = {
+        'detections': [
+            {
+                'boxes': torch.tensor([[4.0, 4.0, 5.0, 5.0], [0.0, 0.0, 2.0, 2.0]]),
+                'scores': torch.tensor([0.8, 0.7]),
+                'labels': torch.tensor([1, 1]),
+            }
+        ]
+    }
+    batch = {'input': torch.randn(1, 3, 8, 8), 'targets': [target]}
+
+    task.step(StaticOutputModel(first), batch, stage='val')
+    task.step(StaticOutputModel(second), batch, stage='val')
+
+    assert task.compute_metrics()['map50'] == pytest.approx(5.0 / 6.0)

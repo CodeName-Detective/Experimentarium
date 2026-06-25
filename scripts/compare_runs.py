@@ -57,6 +57,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[str], list[dict[str, Any]
         config = record.get('config', {})
         row: dict[str, Any] = {
             'run_id': record.get('run_id', ''),
+            'trial_id': record.get('trial_id', cfg_get(config, 'run.trial_id', 1)),
             'status': run_status(record),
             'mode': cfg_get(config, 'run.mode', ''),
             'config_id': record.get('config_id', ''),
@@ -70,7 +71,7 @@ def build_rows(args: argparse.Namespace) -> tuple[list[str], list[dict[str, Any]
         if args.include_command:
             row['command'] = record.get('command', '')
         rows.append(row)
-    columns = ['run_id', 'status', 'mode', 'config_id', *args.config_fields]
+    columns = ['run_id', 'trial_id', 'status', 'mode', 'config_id', *args.config_fields]
     for metric in sorted(metric_names):
         columns.extend([f'final/{metric}', f'best/{metric}'])
     columns.append('run_dir')

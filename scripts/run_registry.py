@@ -49,7 +49,10 @@ def command_list(args: argparse.Namespace) -> None:
     for record in selected:
         config = record.get('config', {})
         mode = config.get('run', {}).get('mode', '') if isinstance(config, dict) else ''
-        print(f'{record.get("run_id", "")}	{mode}	{record.get("config_id", "")}	{record.get("run_dir", "")}')
+        print(
+            f'{record.get("run_id", "")}\ttrial={record.get("trial_id", 1)}\t{mode}'
+            f'\t{record.get("config_id", "")}\t{record.get("run_dir", "")}'
+        )
 
 
 def command_show(args: argparse.Namespace) -> None:
@@ -73,6 +76,8 @@ def command_replay_command(args: argparse.Namespace) -> None:
     if not config_path:
         raise SystemExit(f'registry record has no config_path for run_id={args.run_id}')
     parts = ['uv', 'run', 'python', 'src/main.py', '--config-file', str(config_path)]
+    if args.registry != DEFAULT_REGISTRY:
+        parts.extend(['--registry', str(args.registry)])
     if args.new_run_id:
         parts.extend(['--run-id', args.new_run_id])
     if args.overrides:
@@ -83,6 +88,8 @@ def command_replay_command(args: argparse.Namespace) -> None:
 def command_resume_command(args: argparse.Namespace) -> None:
     """Print a command that resumes training from a saved run id."""
     parts = ['uv', 'run', 'python', 'src/main.py', '--resume-run', args.run_id]
+    if args.registry != DEFAULT_REGISTRY:
+        parts.extend(['--registry', str(args.registry)])
     if args.checkpoint != 'latest':
         parts.append(f'checkpoint.resume={args.checkpoint}')
     if args.overrides:

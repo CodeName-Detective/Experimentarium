@@ -18,23 +18,19 @@ def test_config_to_dict(tiny_cfg):
     assert data['run']['seed'] == 42
 
 
-@pytest.mark.parametrize(
-    'task_name',
-    ['segmentation', 'detection', 'ranking', 'language_modeling'],
-)
+@pytest.mark.parametrize('task_name', ['segmentation', 'detection', 'ranking', 'language_modeling'])
 def test_builtin_task_configs_compose(task_name):
     config_dir = str(Path('configs').resolve())
     with initialize_config_dir(config_dir=config_dir, version_base='1.3'):
         cfg = compose(config_name='config', overrides=[f'task={task_name}'])
-
     assert cfg.task.name == task_name
 
 
-def _write_saved_run_config(path: Path, wandb_run_name: str = 'old-run') -> None:
+def _write_saved_run_config(path: Path, wandb_run_name: str = 'old-run-trial-3') -> None:
     cfg = {
         'run': {
             'name': 'saved',
-            'trial': 1,
+            'trial_id': 3,
             'id': 'old-run',
             'mode': 'train',
             'seed': 42,
@@ -45,21 +41,21 @@ def _write_saved_run_config(path: Path, wandb_run_name: str = 'old-run') -> None
             'evaluations_dir': 'outputs/evaluations',
             'config_dir': 'outputs/run_configs',
             'config_registry': 'outputs/run_registry.jsonl',
-            'run_dir': 'outputs/runs/old-run',
-            'config_path': 'outputs/run_configs/old-run.yaml',
+            'run_dir': 'outputs/runs/old-run/trial_3',
+            'config_path': 'outputs/run_configs/old-run/trial_3.yaml',
             'config_id': 'abc123',
-            'tracking_id': 'old-run',
-            'log_dir': 'outputs/runs/old-run/logs',
-            'prediction_dir': 'outputs/runs/old-run/predictions',
-            'profile_dir': 'outputs/runs/old-run/profiles',
+            'tracking_id': 'old-run-trial-3',
+            'log_dir': 'outputs/runs/old-run/trial_3/logs',
+            'prediction_dir': 'outputs/runs/old-run/trial_3/predictions',
+            'profile_dir': 'outputs/runs/old-run/trial_3/profiles',
         },
         'model': {'name': 'mlp', 'input_dim': 16, 'hidden_dim': 32, 'num_layers': 1, 'num_classes': 2},
         'data': {'name': 'toy_classification', 'input_dim': 16, 'num_classes': 2, 'batch_size': 4},
         'task': {'name': 'classification'},
-        'checkpoint': {'dir': 'outputs/runs/old-run/checkpoints', 'resume': None},
+        'checkpoint': {'dir': 'outputs/runs/old-run/trial_3/checkpoints', 'resume': None},
         'logging': {
-            'jsonl': {'path': 'outputs/runs/old-run/logs/metrics.jsonl'},
-            'tensorboard': {'log_dir': 'outputs/runs/old-run/logs/tensorboard'},
+            'jsonl': {'path': 'outputs/runs/old-run/trial_3/logs/metrics.jsonl'},
+            'tensorboard': {'log_dir': 'outputs/runs/old-run/trial_3/logs/tensorboard'},
             'wandb': {'enabled': False, 'run_name': wandb_run_name},
         },
         'seed': 999,
@@ -71,21 +67,19 @@ def _write_saved_run_config(path: Path, wandb_run_name: str = 'old-run') -> None
 def test_replay_config_arg_extraction():
     config_file, overrides = _extract_config_file_args([
         '--config-file',
-        'outputs/run_configs/demo.yaml',
+        'outputs/run_configs/demo/trial_1.yaml',
         '--run-id',
         'manual-replay',
-        'run.trial=2',
         'optimizer.lr=0.01',
     ])
-
-    assert config_file == 'outputs/run_configs/demo.yaml'
-    assert overrides == ['run.trial=2', 'optimizer.lr=0.01', 'run.id=manual-replay']
+    assert config_file == 'outputs/run_configs/demo/trial_1.yaml'
+    assert overrides == ['optimizer.lr=0.01', 'run.id=manual-replay']
 
     config_file, overrides = _extract_config_file_args([
-        '--run-config=outputs/run_configs/demo.yaml',
+        '--run-config=outputs/run_configs/demo/trial_1.yaml',
         '--run-id=manual-replay',
     ])
-    assert config_file == 'outputs/run_configs/demo.yaml'
+    assert config_file == 'outputs/run_configs/demo/trial_1.yaml'
     assert overrides == ['run.id=manual-replay']
 
 
@@ -106,17 +100,21 @@ def test_replay_run_id_arg_rejects_duplicates():
         _extract_config_file_args(['--config-file', 'saved.yaml', '--run-id', 'a', '--replay-run-id', 'b'])
 
 
-def test_load_replay_config_scrubs_generated_fields_and_applies_overrides(tmp_path):
+def test_resume_run_rejects_manual_run_id():
+    with pytest.raises(ValueError, match='checkpoint path owns run identity'):
+        _extract_config_file_args(['--resume-run', 'saved', '--run-id', 'replacement'])
+
+
+def test_load_replay_config_scrubs_code_owned_fields_and_applies_overrides(tmp_path):
     config_path = tmp_path / 'saved.yaml'
     _write_saved_run_config(config_path)
-
     cfg = load_replay_config(
         config_path,
-        ['run.trial=2', 'run.output_dir=outputs/replayed', 'run.id=replayed-run', '++custom.note=replay'],
+        ['run.output_dir=outputs/replayed', 'run.id=replayed-run', '++custom.note=replay'],
     )
 
     assert cfg_get(cfg, 'run.id') == 'replayed-run'
-    assert cfg_get(cfg, 'run.trial') == 2
+    assert cfg_get(cfg, 'run.trial_id') is None
     assert cfg_get(cfg, 'run.output_dir') == 'outputs/replayed'
     assert cfg_get(cfg, 'run.config_id') is None
     assert cfg_get(cfg, 'run.run_dir') is None
@@ -130,18 +128,15 @@ def test_load_replay_config_scrubs_generated_fields_and_applies_overrides(tmp_pa
     assert cfg_get(cfg, 'device') == 'cpu'
 
 
-def test_load_replay_config_preserves_custom_wandb_run_name(tmp_path):
+def test_load_replay_config_discards_custom_wandb_name(tmp_path):
     config_path = tmp_path / 'saved.yaml'
     _write_saved_run_config(config_path, wandb_run_name='custom-wandb-name')
-
     cfg = load_replay_config(config_path)
-
-    assert cfg_get(cfg, 'logging.wandb.run_name') == 'custom-wandb-name'
+    assert cfg_get(cfg, 'logging.wandb.run_name') is None
 
 
 def test_load_replay_config_rejects_non_dotlist_overrides(tmp_path):
     config_path = tmp_path / 'saved.yaml'
     _write_saved_run_config(config_path)
-
     with pytest.raises(ValueError, match='key=value dotlist overrides'):
         load_replay_config(config_path, ['--multirun'])

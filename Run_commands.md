@@ -5,6 +5,8 @@ environment sanity checks pass. It covers training, evaluation, test, prediction
 resume, config overrides, shell wrappers, Makefile shortcuts, profiling,
 preprocessing, run-registry inspection, run comparison, metric plotting, checkpoint export, run cleanup, checkpoint verification, and tracking workflows.
 
+Note: Evaluation computes metrics and exports predictions, test computes only metrics, and prediction exports only predictions.
+
 Use `sanity_check_commands.md` before this file when validating a new machine.
 
 ## Entry Points
@@ -15,7 +17,7 @@ The main training/evaluation entrypoint is:
 uv run python src/main.py
 ```
 
-Runs the default Hydra config through `src/main.py`, including run setup, sanity checks, training, checkpointing, held-out test evaluation, and prediction export. Set `run.mode=eval`, `test`, `predict`, or `profile` for the other entrypoint modes.
+Runs the default Hydra config through `src/main.py`, including run setup, training, checkpointing, held-out test evaluation, and prediction export. Sanity checks are not run automatically. Set `run.mode=eval`, `test`, `predict`, or `profile` for the other entrypoint modes.
 
 If the project is installed from `pyproject.toml`, the console-script entrypoint is:
 
@@ -45,7 +47,7 @@ Makefile shortcuts are also available:
 
 ```bash
 make train ARGS="+experiment=baseline trainer.max_epochs=1"
-make eval CHECKPOINT=outputs/runs/<run_id>/checkpoints/best.pt
+make eval CHECKPOINT=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
 ```
 
 `make train` forwards `ARGS` to the training entrypoint. `make eval` evaluates the checkpoint supplied through `CHECKPOINT`.
@@ -152,132 +154,81 @@ On CUDA machines:
 uv run python src/main.py +experiment=sanity_gpu
 ```
 
-This forces `run.device=cuda`, strict sanity checks, CUDA driver checks, and a
-tiny full trainer run on the GPU.
+This forces `run.device=cuda` and runs a tiny full trainer workflow on the GPU. Run `uv run python scripts/run_sanity.py +experiment=sanity_gpu` separately when CUDA diagnostics are needed.
 
 ## Evaluation
 
-Evaluation uses the same `src/main.py` entrypoint with `run.mode=eval`. Evaluation mode skips sanity checks, keeps the source training run id, and writes artifacts to `outputs/evaluations/<run_id>/` when using a checkpoint path or selector.
-
-### Evaluate A Specific Checkpoint
+Evaluation derives filesystem and tracking identity from the selected checkpoint. The recommended command loads the saved training config and resolves the checkpoint selector to an explicit path:
 
 ```bash
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
+uv run ml-evaluate-run <run_id> --checkpoint best
+uv run ml-evaluate-run <run_id> --checkpoint last --mode test
+uv run ml-evaluate-run <run_id> --checkpoint epoch_0005 --mode predict
+uv run ml-evaluate-run <run_id> --checkpoint best --print-only
 ```
 
-Loads the specified checkpoint, evaluates the matching baseline config, and writes evaluation artifacts under `outputs/evaluations/<run_id>/`.
+For a source checkpoint such as `outputs/runs/<run_id>/trial_3/checkpoints/best.pt`, output goes to:
 
-The composed model/data/task config must match the checkpoint. If the checkpoint
-was trained with `+experiment=baseline`, evaluate with `+experiment=baseline`.
+```text
+outputs/evaluations/<run_id>/trial_3/eval_best/
+```
 
-Console-script equivalent:
+Different modes and checkpoints remain separate, for example `test_last/`, `predict_epoch_0005/`, and `eval_best/`. Repeating the same source-trial/mode/checkpoint evaluation deletes and recreates only that exact directory and emits a bold red warning.
+
+Direct checkpoint-path equivalents:
 
 ```bash
-uv run ml-train +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
+uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
+uv run ml-train +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
+bash scripts/eval.sh outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt +experiment=baseline
+make eval CHECKPOINT=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
 ```
 
-Performs the same checkpoint evaluation through the installed console script.
+The composed model/data/task config must match the checkpoint. `ml-evaluate-run` avoids that mismatch by loading `outputs/run_configs/<run_id>/trial_<n>.yaml` from the latest training registry record.
 
-Shell equivalent:
-
-```bash
-bash scripts/eval.sh outputs/runs/<run_id>/checkpoints/best.pt +experiment=baseline
-```
-
-Passes the checkpoint as the first wrapper argument and forwards `+experiment=baseline` to Hydra.
-
-Make equivalent for the default config:
-
-```bash
-make eval CHECKPOINT=outputs/runs/<run_id>/checkpoints/best.pt
-```
-
-Evaluates the checkpoint through the Makefile target using the default config unless the target is extended with extra overrides.
-
-The current Makefile `eval` target does not pass arbitrary experiment overrides.
-Use `bash scripts/eval.sh ... +experiment=...` for experiment-specific eval.
-
-### Evaluate By Checkpoint Selector
-
-Use a selector when the run identity resolves to the training run directory you want. If you used `run.id` or `run.trial` during training, use the same override during evaluation. The evaluation output goes to `outputs/evaluations/<run_id>/`.
+Checkpoint selectors also work with a matching composed config:
 
 ```bash
 uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=latest
 uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=best
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=5
 uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=epoch_0005
 ```
 
-These evaluate the latest/last checkpoint, best checkpoint, or epoch-5 checkpoint from the resolved training run and write results to `outputs/evaluations/<run_id>/`.
-
-### Evaluate A Saved Run Id
-
-```bash
-uv run python scripts/evaluate_run.py <run_id> --checkpoint best
-uv run python scripts/evaluate_run.py <run_id> --checkpoint latest --mode test
-uv run python scripts/evaluate_run.py <run_id> --checkpoint epoch_0005 --mode predict
-uv run ml-evaluate-run <run_id> --checkpoint best
-```
-
-This resolves `outputs/run_configs/<run_id>.yaml` from `outputs/run_registry.jsonl`, sets `run.mode`, and loads the selected checkpoint from `outputs/runs/<run_id>/checkpoints/`. Use `--print-only` to display the exact `src/main.py` command without executing it.
-
-### Test-Only And Predict-Only Modes
-
-```bash
-uv run python src/main.py +experiment=baseline run.mode=test checkpoint.resume=best
-uv run python src/main.py +experiment=baseline run.mode=predict checkpoint.resume=best
-```
-
-`run.mode=test` loads the checkpoint and logs held-out test metrics only. `run.mode=predict` loads the checkpoint and writes `test_predictions.json` only. `run.mode=eval` does both metrics and prediction export.
-
-Example with a manual training run id:
-
-```bash
-uv run python src/main.py +experiment=baseline run.id=my_baseline run.mode=eval checkpoint.resume=best
-```
-
-Evaluates the best checkpoint from the manually named training run `my_baseline` and writes artifacts to `outputs/evaluations/my_baseline/`.
+Here the matching config derives the stable run id, and the framework selects the newest checkpoint-bearing training trial. Prefer an explicit checkpoint path or `ml-evaluate-run` when more than one trial exists.
 
 ## Resume Training
 
-### Resume From Latest Checkpoint
+Resume reuses the original training trial. It never allocates a new trial and does not use a newly computed hash to choose identity when an explicit checkpoint path is supplied.
+
+Resume by registry id:
 
 ```bash
-uv run python src/main.py +experiment=baseline checkpoint.resume=latest
+uv run python src/main.py --resume-run <run_id>
+uv run python src/main.py --resume-run <run_id> --registry /path/to/run_registry.jsonl
+uv run ml-run-registry resume-command <run_id>
 ```
 
-Loads the latest valid checkpoint from the baseline run directory and continues training from the next epoch.
+`--resume-run` selects the latest training record, resolves `last.pt` (or an overridden selector) to an explicit checkpoint path, loads the saved config, and defaults to `run.mode=train`. Do not combine it with `--run-id`; the checkpoint path owns run and trial identity.
 
-This resumes from the latest valid checkpoint in the run directory derived from
-the same config identity. Use the same `+experiment`, `run.trial`, and `run.id`
-values that created the original run.
+Resume an exact model:
 
-### Resume From A Specific Checkpoint
+```bash
+uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/last.pt
+uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
+uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/epoch_0005.pt
+```
+
+The path is parsed as `<run_id>/trial_<n>/checkpoints/<model>.pt`; `prepare_run` continues that exact folder. The startup identity line highlights the recovered trial id. Full optimizer, scheduler, scaler, RNG, epoch, and global-step state are restored in train mode.
+
+Selectors remain available when the current config identifies the intended run:
 
 ```bash
 uv run python src/main.py +experiment=baseline checkpoint.resume=latest
 uv run python src/main.py +experiment=baseline checkpoint.resume=best
-uv run python src/main.py +experiment=baseline checkpoint.resume=last
-uv run python src/main.py +experiment=baseline checkpoint.resume=5
 uv run python src/main.py +experiment=baseline checkpoint.resume=epoch_0005
-uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run_id>/checkpoints/last.pt
-uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
 ```
 
-These resume training from the selected checkpoint: latest/last, best, epoch 5, or an explicit checkpoint file. If no new epochs run, test logging is skipped to avoid duplicate tracking points.
-
-Use explicit checkpoint paths when you know exactly which run artifact you want.
-
-### Resume By Run Id
-
-```bash
-uv run python src/main.py --resume-run <run_id>
-uv run python src/main.py --resume-run <run_id> checkpoint.resume=best
-uv run python scripts/run_registry.py resume-command <run_id>
-uv run ml-run-registry resume-command <run_id>
-```
-
-`--resume-run <run_id>` loads the saved resolved config for that run id, adds `checkpoint.resume=latest` when you do not supply a checkpoint override, and keeps `run.id=<run_id>` by default. This is the shortest path for continuing an existing run without reconstructing the original Hydra overrides by hand.
+If resume produces zero new epochs, post-train test metrics and prediction export are skipped to avoid duplicate local and W&B points.
 
 ## Config Override Patterns
 
@@ -296,6 +247,7 @@ uv run python src/main.py trainer.early_stopping.patience=3
 ```
 
 These override training loop behavior: total epochs or optimizer steps, debug batch limits, validation cadence, optional step diagnostics, gradient clipping threshold, and early-stopping patience.
+Step-based validation is side-effect free: the trainer restores training mode and the in-progress training metric state before continuing. Epoch and step metrics both use `global_step`, so logger step values never move backward.
 
 ### Optimizer Overrides
 
@@ -316,7 +268,7 @@ uv run python src/main.py scheduler=onecycle scheduler.max_lr=3e-3 scheduler.int
 uv run python src/main.py scheduler=plateau scheduler.monitor=val/loss scheduler.patience=2
 ```
 
-These disable scheduling or select a learning-rate schedule and tune its key parameters.
+These disable scheduling or select a learning-rate schedule and tune its key parameters. For horizon-based cosine and polynomial schedules, warmup steps are subtracted from the main schedule horizon; fixed-parameter schedulers keep their configured durations. Do not enable `scheduler.warmup.enabled` with `scheduler=plateau`; preflight and scheduler construction reject that unsupported combination.
 
 ### Model Overrides
 
@@ -340,6 +292,8 @@ uv run python src/main.py data.splits.train.num_samples=1024 data.splits.val.num
 ```
 
 These tune global and split-specific dataloader settings, optional input transforms, and synthetic split sizes; `pin_memory=true` is useful when training on CUDA.
+
+`data.pin_memory=true` stores DataLoader batches in pinned CPU memory, enabling faster asynchronous CPU-to-GPU transfers when training on CUDA; it uses extra host RAM and generally provides no benefit for CPU-only runs.
 
 ### Runtime Device And Precision
 
@@ -375,6 +329,8 @@ uv run python src/main.py run.device=cuda run.precision=bf16
 
 Uses bfloat16 autocast on compatible GPUs for training, validation, test evaluation, and prediction export, usually with better numerical range than fp16.
 
+fp16 has greater numerical precision but a smaller value range and often needs loss scaling, while bf16 has a much larger range and better stability but requires newer hardware support.
+
 ### Checkpoint Overrides
 
 ```bash
@@ -384,6 +340,7 @@ uv run python src/main.py checkpoint.save_top_k=2
 ```
 
 These control checkpoint frequency, retention, and which validation metric decides the best checkpoint.
+`checkpoint.keep_last_k=0` disables epoch-file rotation and keeps all saved epoch files. `checkpoint.save_top_k=0` disables both top-k retention and `best.pt`. `checkpoint.save_last=false` disables `last.pt`. The manifest contains only currently retained epoch files, so `scripts/verify_checkpoints.py` remains valid after rotation or overwrites.
 
 For regression:
 
@@ -435,26 +392,23 @@ uv run python src/main.py logging.wandb.enabled=true logging.wandb.mode=offline
 
 Records W&B data locally without requiring network access; sync it later with W&B tooling.
 
-### Run Identity Overrides
+### Run Identity
 
-Create planned repeats:
-
-```bash
-uv run python src/main.py +experiment=baseline run.trial=2
-uv run python src/main.py +experiment=baseline run.trial=3
-```
-
-Creates separate planned repeat run identities while keeping the rest of the baseline config unchanged.
-
-Use a manual run id:
+Use a manual stable id only for fresh work:
 
 ```bash
 uv run python src/main.py +experiment=baseline run.id=my_baseline_debug
 ```
 
-Uses a manually chosen run id, making output folders and tracking runs easier to find.
+Fresh invocations with the same effective config and stable id automatically allocate consecutive trials. `run.trial_id`, `run.tracking_id`, and the W&B run name are generated by the framework and are not user-controlled. Every invocation prints a bold cyan startup line with the run id, trial id, mode, and output directory.
 
-If the final run id already exists, the framework reuses that run directory. Fresh duplicate runs emit a warning; intentional training resumes with `checkpoint.resume=...` do not.
+Fresh replays may receive another stable id with `--run-id`:
+
+```bash
+uv run python src/main.py --from-run <run_id> --run-id replayed_run
+```
+
+Resume cannot use `--run-id`; identity is recovered from the checkpoint path.
 
 ## Full Example Runs
 
@@ -553,7 +507,7 @@ This is the exact command run by `scripts/train.sh`; `"$@"` forwards every argum
 ### Evaluation Wrapper
 
 ```bash
-bash scripts/eval.sh outputs/runs/<run_id>/checkpoints/best.pt +experiment=baseline
+bash scripts/eval.sh outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt +experiment=baseline
 ```
 
 Evaluates the provided best checkpoint while composing the baseline experiment config.
@@ -603,7 +557,7 @@ Trainer-level profiling through the main entrypoint:
 uv run python src/main.py run.mode=profile profiler.active_steps=3 profiler.warmup_steps=1
 ```
 
-This composes the normal experiment config, builds callbacks/loggers/checkpoints like a regular run, profiles a short training-style workload, and writes traces under `outputs/runs/<run.id>/profiles/`.
+This composes the normal experiment config, builds callbacks/loggers/checkpoints like a regular run, loads model weights and checkpoint counters/metadata when `checkpoint.resume` is configured, profiles a short training-style workload, and writes traces under `outputs/runs/<run.id>/trial_<n>/profiles/`. Profile mode does not restore optimizer, scheduler, scaler, or RNG state. Use an explicit checkpoint path when profiling weights from a different run id.
 
 ### W&B Sweep Wrapper
 
@@ -618,13 +572,13 @@ This creates a W&B sweep from `configs/sweep.yaml` and starts a local agent.
 
 ## Makefile Workflows
 
-Install base, optional-extra, and tracking dependencies:
+Install the project, development group, and optional tracking dependencies:
 
 ```bash
 make install
 ```
 
-Runs `uv sync`, `uv sync --all-extras`, and `uv sync --extra tracking` in sequence, matching the current Makefile target.
+Runs `uv sync`, `uv sync --all-extras`, and `uv sync --extra tracking` in sequence, matching the current Makefile target. The repository currently defines only the `tracking` optional extra, so the final command is redundant after `--all-extras` but documents the target exactly.
 
 Train:
 
@@ -646,7 +600,7 @@ Runs the CPU sanity workflow to validate the environment and core pipeline.
 Evaluate default-config checkpoint:
 
 ```bash
-make eval CHECKPOINT=outputs/runs/<run_id>/checkpoints/best.pt
+make eval CHECKPOINT=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
 ```
 
 Evaluates the checkpoint path supplied via `CHECKPOINT` using the Makefile eval target.
@@ -660,7 +614,7 @@ make lint
 make fmt
 ```
 
-Runs tests, coverage, lint checks, and formatter commands through the Makefile.
+Runs tests, coverage, lint checks, and formatter commands through the Makefile. The current `lint` and `fmt` targets cover `src`, `tests`, and `scripts/run_sanity.py`; use `uv run ruff check src tests scripts` and `uv run ruff format src tests scripts` when you want every Python utility included.
 
 Clean generated files:
 
@@ -668,14 +622,11 @@ Clean generated files:
 make clean
 ```
 
-Deletes generated outputs and caches, including run artifacts if the Makefile target is configured that way.
-
-`make clean` deletes generated outputs and caches. Do not run it if you still
-need checkpoints or run logs.
+Deletes `outputs/`, generated `data/processed/`, Python bytecode directories, and pytest/Ruff/mypy caches. This removes run logs, checkpoints, reports, exports, and archives; do not run it while those artifacts are still needed.
 
 ## Distributed And Multi-GPU
 
-The repository includes distributed runtime helpers, rank-aware logging, rank-aware checkpointing, distributed samplers, metric reduction, and automatic `torch.nn.parallel.DistributedDataParallel` wrapping when launched with `torchrun`.
+The repository includes distributed runtime helpers, rank-zero process and backend logging, rank-aware checkpointing, duplicate-free evaluation samplers, weighted metric reduction, rank-gathered prediction export, and automatic `torch.nn.parallel.DistributedDataParallel` wrapping when launched with `torchrun`.
 
 Multi-process CUDA launch:
 
@@ -684,14 +635,16 @@ uv run torchrun --nproc_per_node=2 src/main.py +experiment=baseline run.device=c
 ```
 
 Use the same config you would use for a single-process run. Checkpoint saving and artifact logging are rank-zero gated; dataloaders use `DistributedSampler` when the process group is active.
+Training metrics and losses are reduced using global weighted numerators and denominators. Validation/test samplers do not pad with duplicate examples, and prediction shards are gathered before rank zero writes the JSON export.
 
 ## Run Outputs
 
-Training writes artifacts under a run-specific directory:
+Fresh training/profile artifacts:
 
 ```text
-outputs/runs/<run.id>/
+outputs/runs/<run.id>/trial_<n>/
   logs/
+    train.log
     metrics.jsonl
     tensorboard/
   checkpoints/
@@ -700,67 +653,50 @@ outputs/runs/<run.id>/
     best.pt
     manifest.json
   predictions/
-    test_predictions.json
   profiles/
 ```
 
-Evaluation writes its config and artifacts separately:
+Evaluation/test/predict artifacts are keyed by the source training trial, mode, and checkpoint:
 
 ```text
-outputs/evaluations/<run.id>/
-  config.yaml
-  logs/
-    metrics.jsonl
-    tensorboard/
-  predictions/
-    test_predictions.json
-  profiles/
+outputs/evaluations/<run.id>/trial_<source_trial>/
+  eval_best/
+    config.yaml
+    logs/
+    predictions/test_predictions.json
+  eval_last/
+  eval_epoch_0005/
+  test_best/
+  predict_best/
 ```
 
-Training configs and the shared registry are stored in:
+Rerunning one exact evaluation target replaces its existing folder. Other checkpoint/mode folders are untouched.
+
+Training configs and registry:
 
 ```text
-outputs/run_configs/<run.id>.yaml
+outputs/run_configs/<run.id>/trial_<n>.yaml
 outputs/run_registry.jsonl
 ```
 
-Use those files to recover the command and config for a previous run. Each JSONL record includes `command`, `command_cwd`, run identity fields, artifact paths, and the resolved config. Run the command from `command_cwd` to repeat the invocation. Sensitive CLI values are redacted in `command`; do not put secrets directly in config values because the resolved config is stored.
+Each registry record stores run id, trial id, checkpoint label when applicable, artifact paths, resolved config, redacted command, and command working directory.
 
-Inspect the run registry:
-
-```bash
-uv run python scripts/run_registry.py list
-uv run python scripts/run_registry.py show <run_id>
-uv run python scripts/run_registry.py latest-command
-uv run python scripts/run_registry.py replay-command <run_id> --new-run-id replayed_run
-uv run python scripts/run_registry.py resume-command <run_id>
-uv run python scripts/run_registry.py diff <run_id_a> <run_id_b>
-```
-
-Installed console-script equivalent:
+Inspect and replay:
 
 ```bash
 uv run ml-run-registry list
+uv run ml-run-registry show <run_id>
+uv run ml-run-registry latest-command
 uv run ml-run-registry replay-command <run_id> --new-run-id replayed_run
 uv run ml-run-registry resume-command <run_id>
-```
+uv run ml-run-registry diff <run_id_a> <run_id_b>
 
-Replay a saved resolved config snapshot:
-
-```bash
-uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml
+uv run python src/main.py --config-file outputs/run_configs/<run.id>/trial_<n>.yaml
 uv run python src/main.py --from-run <run.id>
-bash scripts/train.sh --config-file outputs/run_configs/<run.id>.yaml
-```
-
-Run a distinct planned replay from the same saved config:
-
-```bash
-uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml --run-id replayed_run
 uv run python src/main.py --from-run <run.id> --run-id replayed_run
-uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml run.trial=2
 ```
 
+A config-file/from-run replay is fresh and receives a new code-managed trial. A resume command resolves an existing checkpoint and continues its original trial.
 
 ## Post-Run Analysis And Cleanup
 
@@ -794,7 +730,7 @@ Export a checkpoint for sharing or deployment:
 ```bash
 uv run python scripts/export_checkpoint.py <run_id> --checkpoint best --format state_dict
 uv run python scripts/export_checkpoint.py <run_id> --checkpoint best --format checkpoint
-uv run python scripts/export_checkpoint.py outputs/runs/<run_id>/checkpoints/best.pt --format state_dict --output outputs/exports/<run_id>/model.pt
+uv run python scripts/export_checkpoint.py outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt --format state_dict --output outputs/exports/<run_id>/model.pt
 uv run ml-export-checkpoint <run_id> --checkpoint best --format state_dict
 ```
 
@@ -811,16 +747,16 @@ uv run ml-cleanup-runs list --statuses failed incomplete missing
 ```
 
 `cleanup` is dry-run by default. Pass `--yes` to delete selected run directories. `--unsuccessful` selects failed, incomplete, and missing runs; failed runs include exception checkpoints or train logs with tracebacks/errors. Add `--delete-config` only when you also want to remove the saved config snapshot.
-
+Cleanup status is evaluated per artifact directory, so a newer successful evaluation record cannot hide an older failed training directory with the same run id. A later successful training resume supersedes exception files and traceback text from earlier sessions.
 
 Verify a checkpoint directory and selector checksums:
 
 ```bash
-uv run python scripts/verify_checkpoints.py outputs/runs/<run_id>/checkpoints
-uv run ml-verify-checkpoints outputs/runs/<run_id>/checkpoints
+uv run python scripts/verify_checkpoints.py outputs/runs/<run_id>/trial_<n>/checkpoints
+uv run ml-verify-checkpoints outputs/runs/<run_id>/trial_<n>/checkpoints
 ```
 
-Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides. `--from-run <run_id>` resolves the saved config through `outputs/run_registry.jsonl`; `--resume-run <run_id>` does the same and adds `checkpoint.resume=latest` plus `run.id=<run_id>` unless you override them.
+Config-file mode expects a fully resolved output config, not a Hydra group preset. It removes generated runtime paths and ids before `prepare_run`, then applies `--run-id` and any trailing `key=value` dotlist overrides. `--from-run <run_id>` resolves the saved config through `outputs/run_registry.jsonl`; `--resume-run <run_id>` selects the latest training record and supplies its checkpoint as an explicit path; `--run-id` is rejected for resume. Add `--registry <path>` when using a nondefault registry; generated replay/resume commands include it automatically.
 
 ## Common Problems
 
@@ -828,9 +764,7 @@ Config-file mode expects a fully resolved output config, not a Hydra group prese
   `configs/experiment/` and use `+experiment=<filename_without_yaml>`.
 - Checkpoint shape mismatch during eval: use the same model/data/task config
   that created the checkpoint.
-- `checkpoint.resume=latest` does not find the intended checkpoint: use the same
-  `+experiment`, `run.trial`, and `run.id` values from the original run, or pass
-  an explicit checkpoint path under `outputs/runs/<run_id>/checkpoints/`.
+- `checkpoint.resume=latest` does not find the intended checkpoint: use `--resume-run <run_id>` or pass an explicit path under `outputs/runs/<run_id>/trial_<n>/checkpoints/`.
 - CUDA unavailable: run `uv run python scripts/run_sanity.py +experiment=sanity_gpu`
   or see `sanity_check_commands.md`.
 - Missing W&B or TensorBoard package: install tracking extras with

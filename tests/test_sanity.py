@@ -1,3 +1,5 @@
+from copy import deepcopy
+
 from src.utils.sanity import run_sanity_checks
 
 
@@ -342,3 +344,24 @@ def test_cuda_diagnostics_recommendation_works_without_torch(monkeypatch):
     assert 'PyTorch is not installed' in diagnostics.compatibility_message
     assert recommendation.selected.cuda_tag == 'cu121'
     assert 'torch==2.5.1+cu121' in cuda.format_torch_install_recommendation(recommendation)
+
+
+def test_sanity_rejects_invalid_precision_and_plateau_interval(tiny_cfg):
+    from src.utils.sanity import core
+
+    cfg = deepcopy(tiny_cfg)
+    cfg['run']['precision'] = 'fp23_typo'
+    cfg['scheduler'] = {
+        'name': 'plateau',
+        'interval': 'step',
+        'monitor': 'val/loss',
+        'warmup': {'enabled': True, 'steps': 1},
+    }
+    report = core.SanityReport()
+
+    core._check_config_values(report, cfg)
+
+    failures = {result.name for result in report.failures}
+    assert 'config_value.run.precision' in failures
+    assert 'config_value.scheduler.plateau_interval' in failures
+    assert 'config_value.scheduler.plateau_warmup' in failures

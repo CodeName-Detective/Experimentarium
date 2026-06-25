@@ -1,13 +1,8 @@
 """Config-derived run identity and artifact path preparation.
 
-Use this module at process startup before building loggers or checkpoints. It
-computes a deterministic config hash, derives a readable run id, writes a
-resolved config snapshot, appends a run-to-config registry record, and rewrites
-artifact paths so every run has an auditable directory.
-
-Typical usage:
-    from src.utils.run import prepare_run
-    info = prepare_run(cfg)
+Fresh training runs receive code-managed trial ids. Resume and evaluation
+identity is recovered from checkpoint paths so logs, checkpoints, configs, and
+external tracking use the same run/trial naming.
 """
 
 from __future__ import annotations
@@ -17,6 +12,7 @@ import hashlib
 import json
 import re
 import shlex
+import shutil
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -28,12 +24,17 @@ from src.utils.config import cfg_get, config_to_dict
 try:
     from omegaconf import DictConfig, OmegaConf
 except Exception:  # pragma: no cover - fallback for minimal environments
-    DictConfig = None  # type: ignore[assignment]
-    OmegaConf = None  # type: ignore[assignment]
+    DictConfig = None  # type: ignore[misc, assignment]
+    OmegaConf = None  # type: ignore[misc, assignment]
 
 
 _HASH_EXCLUDED_PATHS = (
+    ('sanity',),
     ('run', 'id'),
+    ('run', 'trial'),
+    ('run', 'trial_id'),
+    ('run', 'source_trial_id'),
+    ('run', 'checkpoint_label'),
     ('run', 'config_id'),
     ('run', 'run_dir'),
     ('run', 'runs_dir'),
@@ -54,7 +55,6 @@ _HASH_EXCLUDED_PATHS = (
     ('logging', 'wandb', 'run_name'),
 )
 
-
 _SENSITIVE_ARGUMENT_PATTERN = re.compile(
     r'(?:^|[._-])(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)(?:$|[._-])',
     re.IGNORECASE,
@@ -66,52 +66,115 @@ class RunInfo:
     """Resolved run identity and artifact locations."""
 
     run_id: str
+    trial_id: int
     config_id: str
     run_dir: str
     config_path: str
     config_registry: str
+    checkpoint_label: str | None = None
     reused_existing: bool = False
     warning: str | None = None
 
 
-def prepare_run(cfg: Any) -> RunInfo:
-    """Derive run identity from config and rewrite artifact paths.
+@dataclass(frozen=True)
+class _TrainingTarget:
+    run_id: str
+    trial_id: int
+    run_dir: Path
+    runs_dir: Path
 
-    The base id is deterministic for the same effective experiment config.
-    Reusing an existing id writes artifacts to the same run directory and emits
-    a warning instead of selecting ``run_2``, ``run_3``, and so on. Evaluation
-    from a checkpoint under ``runs/<run_id>/checkpoints`` keeps the training run
-    id and writes artifacts to ``evaluations/<run_id>``.
+
+def prepare_run(cfg: Any) -> RunInfo:
+    """Resolve code-owned identity and rewrite all runtime artifact paths.
+
+    Fresh train/profile invocations atomically allocate the next ``trial_<n>``.
+    Training resume reuses the run id and trial encoded in the checkpoint path.
+    Evaluation uses a deterministic directory keyed by source trial, mode, and
+    checkpoint name; rerunning that exact evaluation replaces its old outputs.
 
     Returns:
         Resolved run identity and artifact paths.
+
+    Raises:
+        FileNotFoundError: If an evaluation checkpoint does not exist.
     """
     raw_config = config_to_dict(cfg)
     config_id = _config_hash(raw_config)
-    output_dir = Path(str(cfg_get(cfg, 'run.output_dir', 'outputs')))
-    runs_dir = Path(str(cfg_get(cfg, 'run.runs_dir', output_dir / 'runs')))
-    evaluations_dir = Path(str(cfg_get(cfg, 'run.evaluations_dir', output_dir / 'evaluations')))
-    config_dir = Path(str(cfg_get(cfg, 'run.config_dir', output_dir / 'run_configs')))
-    registry_path = Path(str(cfg_get(cfg, 'run.config_registry', output_dir / 'run_registry.jsonl')))
+    mode = str(cfg_get(cfg, 'run.mode', 'train')).lower()
+    output_dir = _configured_path(cfg, 'run.output_dir', Path('outputs'))
+    runs_dir = _configured_path(cfg, 'run.runs_dir', output_dir / 'runs')
+    evaluations_dir = _configured_path(cfg, 'run.evaluations_dir', output_dir / 'evaluations')
+    config_dir = _configured_path(cfg, 'run.config_dir', output_dir / 'run_configs')
+    registry_path = _configured_path(cfg, 'run.config_registry', output_dir / 'run_registry.jsonl')
+
     explicit_id = cfg_get(cfg, 'run.id', None)
-    derived_run_id = _derived_run_id(cfg, config_id)
-    is_evaluation = _is_evaluation(cfg)
-    evaluation_run_id = _prepare_eval_resume(cfg, runs_dir, explicit_id, derived_run_id)
-    if evaluation_run_id:
-        base_run_id = evaluation_run_id
-    elif explicit_id:
-        base_run_id = _slug(str(explicit_id)) or 'run'
+    base_run_id: str | None = _slug(str(explicit_id)) if explicit_id else None
+    resume = str(cfg_get(cfg, 'checkpoint.resume', '') or '').strip()
+    checkpoint_label: str | None = None
+    warning: str | None = None
+
+    if mode == 'train' and resume:
+        target = _resolve_training_target(
+            resume,
+            cfg,
+            runs_dir,
+            registry_path,
+            base_run_id or _derived_run_id(cfg, config_id),
+        )
+        if _is_explicit_checkpoint_path(resume):
+            output_dir, runs_dir, evaluations_dir, config_dir, registry_path = _adopt_checkpoint_root(
+                cfg, target, registry_path
+            )
+        run_id = target.run_id
+        trial_id = target.trial_id
+        run_dir = target.run_dir
+        reused_existing = True
+    elif mode in {'eval', 'test', 'predict'} and resume:
+        target = _resolve_training_target(
+            resume,
+            cfg,
+            runs_dir,
+            registry_path,
+            base_run_id or _derived_run_id(cfg, config_id),
+        )
+        if _is_explicit_checkpoint_path(resume):
+            output_dir, runs_dir, evaluations_dir, config_dir, registry_path = _adopt_checkpoint_root(
+                cfg, target, registry_path
+            )
+        checkpoint_path = _resolve_checkpoint_path(resume, target.run_dir)
+        if not checkpoint_path.is_file():
+            raise FileNotFoundError(f'Evaluation checkpoint does not exist: {checkpoint_path}')
+        checkpoint_label = _checkpoint_label(checkpoint_path)
+        _cfg_set(cfg, 'checkpoint.resume', str(checkpoint_path))
+        run_id = target.run_id
+        trial_id = target.trial_id
+        run_dir = evaluations_dir / run_id / _trial_dir_name(trial_id) / f'{mode}_{checkpoint_label}'
+        reused_existing = _replace_evaluation_dir(run_dir)
+        if reused_existing:
+            warning = _evaluation_overwrite_warning(run_id, trial_id, mode, checkpoint_label, run_dir)
     else:
-        base_run_id = derived_run_id
+        run_id = base_run_id or _derived_run_id(cfg, config_id)
+        artifact_root = evaluations_dir if mode in {'eval', 'test', 'predict'} else runs_dir
+        trial_id, trial_dir = _select_fresh_trial(artifact_root, run_id, registry_path, mode)
+        checkpoint_label = 'uninitialized' if mode in {'eval', 'test', 'predict'} else None
+        run_dir = trial_dir / f'{mode}_{checkpoint_label}' if checkpoint_label is not None else trial_dir
+        if is_rank0():
+            run_dir.mkdir(parents=True, exist_ok=True)
+        run_dir = Path(str(broadcast_object(str(run_dir))))
+        reused_existing = False
 
-    artifact_root = evaluations_dir if is_evaluation else runs_dir
-    run_dir = artifact_root / base_run_id
-    config_path = run_dir / 'config.yaml' if is_evaluation else config_dir / f'{base_run_id}.yaml'
-    run_id, reused_existing = _select_run_id(base_run_id, run_dir, config_path)
-    tracking_id = f'{run_id}_evaluation' if is_evaluation else run_id
-    warning = _reuse_warning(run_id, run_dir, config_path) if reused_existing and not _is_training_resume(cfg) else None
+    config_path = (
+        run_dir / 'config.yaml'
+        if mode in {'eval', 'test', 'predict'}
+        else config_dir / run_id / f'{_trial_dir_name(trial_id)}.yaml'
+    )
+    tracking_id = _tracking_id(run_id, trial_id, mode, checkpoint_label)
 
+    _cfg_set(cfg, 'run.output_dir', str(output_dir))
     _cfg_set(cfg, 'run.id', run_id)
+    _cfg_set(cfg, 'run.trial_id', trial_id)
+    _cfg_set(cfg, 'run.source_trial_id', trial_id if mode in {'eval', 'test', 'predict'} and resume else None)
+    _cfg_set(cfg, 'run.checkpoint_label', checkpoint_label)
     _cfg_set(cfg, 'run.config_id', config_id)
     _cfg_set(cfg, 'run.runs_dir', str(runs_dir))
     _cfg_set(cfg, 'run.evaluations_dir', str(evaluations_dir))
@@ -126,15 +189,16 @@ def prepare_run(cfg: Any) -> RunInfo:
     _cfg_set(cfg, 'checkpoint.dir', str(run_dir / 'checkpoints'))
     _cfg_set(cfg, 'logging.jsonl.path', str(run_dir / 'logs' / 'metrics.jsonl'))
     _cfg_set(cfg, 'logging.tensorboard.log_dir', str(run_dir / 'logs' / 'tensorboard'))
-    if not cfg_get(cfg, 'logging.wandb.run_name', None):
-        _cfg_set(cfg, 'logging.wandb.run_name', tracking_id)
+    _cfg_set(cfg, 'logging.wandb.run_name', tracking_id)
 
     info = RunInfo(
         run_id=run_id,
+        trial_id=trial_id,
         config_id=config_id,
         run_dir=str(run_dir),
         config_path=str(config_path),
         config_registry=str(registry_path),
+        checkpoint_label=checkpoint_label,
         reused_existing=reused_existing,
         warning=warning,
     )
@@ -143,101 +207,266 @@ def prepare_run(cfg: Any) -> RunInfo:
     return info
 
 
+def _configured_path(cfg: Any, key: str, default: Path) -> Path:
+    value = cfg_get(cfg, key, None)
+    if value is None or str(value).lower() in {'none', 'null'}:
+        return default
+    return Path(str(value))
+
+
 def _derived_run_id(cfg: Any, config_id: str) -> str:
-    name = cfg_get(cfg, 'run.name', None) or 'run'
-    trial = cfg_get(cfg, 'run.trial', None)
-    parts = [str(name)]
+    parts = [str(cfg_get(cfg, 'run.name', None) or 'run')]
     for key in ('model.name', 'data.name', 'task.name'):
         value = cfg_get(cfg, key, None)
         if value:
             parts.append(str(value))
-    if trial is not None:
-        parts.append(f'trial{trial}')
     stem = _slug('-'.join(parts)) or 'run'
     return f'{stem}-{config_id}'
 
 
-def _select_run_id(base_run_id: str, run_dir: Path, config_path: Path) -> tuple[str, bool]:
-    if is_rank0():
-        run_id, reused_existing = _resolve_run_id(base_run_id, run_dir, config_path)
-    else:
-        run_id = base_run_id
-        reused_existing = False
-    payload = broadcast_object((run_id, reused_existing))
-    return str(payload[0]), bool(payload[1])
+def _resolve_training_target(
+    resume: str,
+    cfg: Any,
+    runs_dir: Path,
+    registry_path: Path,
+    fallback_run_id: str,
+) -> _TrainingTarget:
+    if _is_explicit_checkpoint_path(resume):
+        target = _training_target_from_checkpoint_path(Path(resume).expanduser(), runs_dir)
+        if target is None:
+            raise ValueError(
+                'Explicit checkpoint paths must be under '
+                f'{runs_dir}/<run_id>/trial_<n>/checkpoints/ so run identity can be recovered'
+            )
+        return target
+    return _existing_training_trial(runs_dir, registry_path, fallback_run_id)
 
 
-def _resolve_run_id(base_run_id: str, run_dir: Path, config_path: Path) -> tuple[str, bool]:
-    reused_existing = run_dir.exists() or config_path.exists()
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return base_run_id, reused_existing
+def _is_explicit_checkpoint_path(value: str) -> bool:
+    if '/' in value or '\\' in value or Path(value).is_absolute():
+        return True
+    return _selector_checkpoint_name(value) is None
 
 
-def _is_evaluation(cfg: Any) -> bool:
-    return str(cfg_get(cfg, 'run.mode', 'train')).lower() in {'eval', 'test', 'predict'}
-
-
-def _is_training_resume(cfg: Any) -> bool:
-    return str(cfg_get(cfg, 'run.mode', 'train')).lower() == 'train' and bool(cfg_get(cfg, 'checkpoint.resume', None))
-
-
-def _prepare_eval_resume(cfg: Any, runs_dir: Path, explicit_id: Any, derived_run_id: str) -> str | None:
-    if not _is_evaluation(cfg):
-        return None
-
-    resume = str(cfg_get(cfg, 'checkpoint.resume', '') or '').strip()
-    training_run_id = _slug(str(explicit_id)) if explicit_id else derived_run_id
-    if resume:
-        checkpoint_path = Path(resume).expanduser()
-        training_run_id = _training_run_id_from_checkpoint_path(checkpoint_path, runs_dir) or training_run_id
-        selected_path = _resolve_eval_checkpoint_selector(resume, runs_dir / training_run_id)
-        if selected_path is not None:
-            _cfg_set(cfg, 'checkpoint.resume', str(selected_path))
-
-    return training_run_id or None
-
-
-def _training_run_id_from_checkpoint_path(checkpoint_path: Path, runs_dir: Path) -> str | None:
+def _training_target_from_checkpoint_path(checkpoint_path: Path, runs_dir: Path) -> _TrainingTarget | None:
+    del runs_dir  # The checkpoint path is the source of truth for explicit resume/evaluation.
     try:
-        checkpoint_path = checkpoint_path.resolve()
-        resolved_runs_dir = runs_dir.expanduser().resolve()
+        resolved = checkpoint_path.resolve()
     except OSError:
         return None
-    parts = checkpoint_path.parts
-    run_parts = resolved_runs_dir.parts
-    if parts[: len(run_parts)] != run_parts or len(parts) <= len(run_parts) + 2:
+    parts = resolved.parts
+    try:
+        checkpoint_index = len(parts) - 1 - tuple(reversed(parts)).index('checkpoints')
+    except ValueError:
         return None
-    if parts[len(run_parts) + 1] != 'checkpoints':
+    if checkpoint_index < 2 or checkpoint_index >= len(parts) - 1:
         return None
-    return _slug(parts[len(run_parts)]) or None
+
+    trial_match = re.fullmatch(r'trial_(\d+)', parts[checkpoint_index - 1])
+    if trial_match is not None and checkpoint_index >= 3:
+        run_id = _slug(parts[checkpoint_index - 2]) or 'run'
+        parsed_runs_dir = Path(*parts[: checkpoint_index - 2])
+        run_dir = parsed_runs_dir / parts[checkpoint_index - 2] / parts[checkpoint_index - 1]
+        return _TrainingTarget(
+            run_id=run_id,
+            trial_id=int(trial_match.group(1)),
+            run_dir=run_dir,
+            runs_dir=parsed_runs_dir,
+        )
+
+    run_id = _slug(parts[checkpoint_index - 1]) or 'run'
+    parsed_runs_dir = Path(*parts[: checkpoint_index - 1])
+    run_dir = parsed_runs_dir / parts[checkpoint_index - 1]
+    return _TrainingTarget(run_id=run_id, trial_id=1, run_dir=run_dir, runs_dir=parsed_runs_dir)
 
 
-def _resolve_eval_checkpoint_selector(resume: str, training_run_dir: Path) -> Path | None:
-    checkpoint_dir = training_run_dir / 'checkpoints'
-    selector = resume.strip().lower()
-    if selector in {'latest', 'last'}:
-        return checkpoint_dir / 'last.pt'
-    if selector == 'best':
-        return checkpoint_dir / 'best.pt'
-    epoch = _parse_epoch_selector(selector)
-    if epoch is not None:
-        return checkpoint_dir / f'epoch_{epoch:04d}.pt'
+def _adopt_checkpoint_root(
+    cfg: Any,
+    target: _TrainingTarget,
+    registry_path: Path,
+) -> tuple[Path, Path, Path, Path, Path]:
+    """Use the checkpoint's output tree while preserving explicit child-path overrides."""
+    output_dir = target.runs_dir.parent
+    evaluations_dir = _configured_path(cfg, 'run.evaluations_dir', output_dir / 'evaluations')
+    config_dir = _configured_path(cfg, 'run.config_dir', output_dir / 'run_configs')
+    configured_registry = cfg_get(cfg, 'run.config_registry', None)
+    if configured_registry is None or str(configured_registry).lower() in {'none', 'null'}:
+        registry_path = output_dir / 'run_registry.jsonl'
+    return output_dir, target.runs_dir, evaluations_dir, config_dir, registry_path
+
+
+def _existing_training_trial(runs_dir: Path, registry_path: Path, run_id: str) -> _TrainingTarget:
+    base_dir = runs_dir / run_id
+    trials = _filesystem_trial_dirs(base_dir)
+    if _is_legacy_run_dir(base_dir):
+        trials.setdefault(1, base_dir)
+    registry_trials = sorted(_registry_trial_ids(registry_path, run_id, is_evaluation=False), reverse=True)
+    candidates = [trial_id for trial_id in registry_trials if trial_id in trials]
+    candidates.extend(sorted((trial_id for trial_id in trials if trial_id not in candidates), reverse=True))
+    for trial_id in candidates:
+        run_dir = trials[trial_id]
+        if _has_checkpoint_files(run_dir / 'checkpoints'):
+            return _TrainingTarget(
+                run_id=run_id,
+                trial_id=trial_id,
+                run_dir=run_dir,
+                runs_dir=runs_dir,
+            )
+    raise FileNotFoundError(f'No checkpoint-bearing training trial found for run_id={run_id}')
+
+
+def _resolve_checkpoint_path(resume: str, training_run_dir: Path) -> Path:
+    if _is_explicit_checkpoint_path(resume):
+        return Path(resume).expanduser()
+    checkpoint_name = _selector_checkpoint_name(resume)
+    if checkpoint_name is None:
+        raise ValueError(f'Unsupported checkpoint selector: {resume}')
+    return training_run_dir / 'checkpoints' / checkpoint_name
+
+
+def _selector_checkpoint_name(selector: str) -> str | None:
+    normalized = selector.strip().lower()
+    if normalized in {'latest', 'last', 'last.pt'}:
+        return 'last.pt'
+    if normalized in {'best', 'best.pt'}:
+        return 'best.pt'
+    match = re.fullmatch(r'(?:epoch[_-]?)?(\d+)(?:\.pt)?', normalized)
+    if match is not None:
+        return f'epoch_{int(match.group(1)):04d}.pt'
     return None
 
 
-def _parse_epoch_selector(selector: str) -> int | None:
-    match = re.fullmatch(r'(?:epoch[_-]?)?(\d+)(?:\.pt)?', selector)
-    if match is None:
-        return None
-    return int(match.group(1))
+def _checkpoint_label(path: Path) -> str:
+    return _slug(path.stem) or 'checkpoint'
 
 
-def _reuse_warning(run_id: str, run_dir: Path, config_path: Path) -> str:
+def _tracking_id(run_id: str, trial_id: int, mode: str, checkpoint_label: str | None) -> str:
+    base = f'{run_id}-trial-{trial_id}'
+    if mode in {'eval', 'test', 'predict'}:
+        return f'{base}-{mode}-{checkpoint_label or "uninitialized"}'
+    return base
+
+
+def _select_fresh_trial(
+    artifact_root: Path,
+    run_id: str,
+    registry_path: Path,
+    mode: str,
+) -> tuple[int, Path]:
+    if is_rank0():
+        result = _allocate_trial(
+            artifact_root,
+            run_id,
+            registry_path,
+            is_evaluation=mode in {'eval', 'test', 'predict'},
+        )
+    else:
+        result = (0, artifact_root / run_id)
+    payload = broadcast_object((result[0], str(result[1])))
+    return int(payload[0]), Path(str(payload[1]))
+
+
+def _allocate_trial(
+    artifact_root: Path,
+    run_id: str,
+    registry_path: Path,
+    *,
+    is_evaluation: bool,
+) -> tuple[int, Path]:
+    base_dir = artifact_root / run_id
+    trial_id = _last_trial_id(base_dir, registry_path, run_id, is_evaluation=is_evaluation) + 1
+    while True:
+        run_dir = base_dir / _trial_dir_name(trial_id)
+        try:
+            run_dir.mkdir(parents=True, exist_ok=False)
+            return trial_id, run_dir
+        except FileExistsError:
+            trial_id += 1
+
+
+def _replace_evaluation_dir(run_dir: Path) -> bool:
+    if is_rank0():
+        existed = run_dir.exists() or run_dir.is_symlink()
+        if run_dir.is_symlink():
+            run_dir.unlink()
+        elif run_dir.exists():
+            shutil.rmtree(run_dir)
+        run_dir.mkdir(parents=True, exist_ok=False)
+    else:
+        existed = False
+    return bool(broadcast_object(existed))
+
+
+def _evaluation_overwrite_warning(
+    run_id: str,
+    trial_id: int,
+    mode: str,
+    checkpoint_label: str,
+    run_dir: Path,
+) -> str:
     return (
-        f'WARNING: RUN ID {run_id} ALREADY EXISTS. REUSING EXISTING RUN DIRECTORY '
-        f'{run_dir} AND CONFIG SNAPSHOT {config_path}; NEW LOGS, METRICS, PREDICTIONS, '
-        'AND TRACKING EVENTS WILL BE WRITTEN TO THIS SAME RUN ID.'
+        'OVERWRITING EXISTING EVALUATION OUTPUT: '
+        f'run_id={run_id} trial_id={trial_id} mode={mode} checkpoint={checkpoint_label} directory={run_dir}'
     )
+
+
+def _last_trial_id(base_dir: Path, registry_path: Path, run_id: str, *, is_evaluation: bool) -> int:
+    trial_ids = set(_filesystem_trial_dirs(base_dir))
+    trial_ids.update(_registry_trial_ids(registry_path, run_id, is_evaluation=is_evaluation))
+    if _is_legacy_run_dir(base_dir):
+        trial_ids.add(1)
+    return max(trial_ids, default=0)
+
+
+def _filesystem_trial_dirs(base_dir: Path) -> dict[int, Path]:
+    if not base_dir.exists():
+        return {}
+    trials: dict[int, Path] = {}
+    for path in base_dir.iterdir():
+        match = re.fullmatch(r'trial_(\d+)', path.name)
+        if path.is_dir() and match is not None:
+            trials[int(match.group(1))] = path
+    return trials
+
+
+def _registry_trial_ids(registry_path: Path, run_id: str, *, is_evaluation: bool) -> set[int]:
+    trial_ids: set[int] = set()
+    if not registry_path.exists():
+        return trial_ids
+    for line in registry_path.read_text(encoding='utf-8', errors='replace').splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if str(record.get('run_id', '')) != run_id:
+            continue
+        record_is_evaluation = str(cfg_get(record.get('config', {}), 'run.mode', 'train')).lower() in {
+            'eval',
+            'test',
+            'predict',
+        }
+        if record_is_evaluation != is_evaluation:
+            continue
+        trial_id = record.get('trial_id', cfg_get(record.get('config', {}), 'run.trial_id', None))
+        try:
+            trial_ids.add(int(trial_id))
+        except (TypeError, ValueError):
+            trial_ids.add(1)
+    return trial_ids
+
+
+def _trial_dir_name(trial_id: int) -> str:
+    return f'trial_{trial_id}'
+
+
+def _is_legacy_run_dir(base_dir: Path) -> bool:
+    return any((base_dir / name).exists() for name in ('checkpoints', 'logs', 'predictions', 'profiles'))
+
+
+def _has_checkpoint_files(checkpoint_dir: Path) -> bool:
+    return checkpoint_dir.exists() and any(path.is_file() and path.suffix == '.pt' for path in checkpoint_dir.iterdir())
 
 
 def _config_hash(cfg: dict[str, Any]) -> str:

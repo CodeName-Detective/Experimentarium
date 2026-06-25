@@ -14,7 +14,7 @@ loss:
   # Cross-entropy is suitable for multi-class semantic segmentation.
   name: cross_entropy
   label_smoothing: 0.0
-# Pixel metrics are computed after flattening valid, non-ignore pixels.
+# Pixel metrics use one dataset-level confusion matrix over valid, non-ignore pixels.
 metrics:
   - accuracy
   - iou

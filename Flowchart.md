@@ -13,32 +13,37 @@ flowchart TD
     User --> UVSanity[uv run python scripts/run_sanity.py]
     User --> ShellTrain[bash scripts/train.sh]
     User --> ShellEval[bash scripts/eval.sh CHECKPOINT]
-    User --> ShellSanity[bash scripts/run_sanity.py not used directly]
     User --> ShellPreprocess[bash scripts/preprocess.sh]
     User --> ShellProfile[bash scripts/profile.sh]
     User --> ShellSweep[bash scripts/sweep.sh]
     User --> MakeTargets["make install / train / eval / sanity / test / lint"]
-    User --> ConsoleScripts[ml-train / ml-sanity]
-    User --> RunUtilityCLIs["ml-run-registry / ml-compare-runs / ml-plot-metrics / ml-evaluate-run / ml-export-checkpoint / ml-cleanup-runs"]
+    User --> TrainConsole[ml-train]
+    User --> SanityConsole[ml-sanity]
+    User --> RegistryCLIs["ml-run-registry / ml-compare-runs / ml-plot-metrics / ml-export-checkpoint / ml-cleanup-runs"]
+    User --> EvaluateCLI[ml-evaluate-run]
+    User --> VerifyCLI[ml-verify-checkpoints]
 
     ShellTrain --> Main[src/main.py]
     ShellEval --> Main
     UVTrain --> Main
+    TrainConsole --> Main
     ReplayTrain --> ReplayConfig[Load resolved YAML and scrub generated paths]
     ReplayConfig --> Main
-    ConsoleScripts --> Main
     MakeTargets --> Main
-    RunUtilityCLIs --> RunRegistry[outputs/run_registry.jsonl]
-    RunUtilityCLIs --> RegistryTools[run registry, compare, plot, export, cleanup scripts]
-    RunUtilityCLIs --> EvaluateRunScript[scripts/evaluate_run.py]
+
+    UVSanity --> SanityScript[scripts/run_sanity.py]
+    SanityConsole --> SanityScript
+    MakeTargets --> SanityScript
+
+    RegistryCLIs --> RegistryTools[registry, comparison, plotting, export, and cleanup scripts]
+    RegistryTools --> RunRegistry[outputs/run_registry.jsonl]
     RegistryTools --> Reports[outputs/reports or requested output path]
     RegistryTools --> Exports[outputs/exports or requested output path]
     RegistryTools --> Archives[outputs/archives]
+    EvaluateCLI --> EvaluateRunScript[scripts/evaluate_run.py]
     EvaluateRunScript --> Main
-
-    UVSanity --> SanityScript[scripts/run_sanity.py]
-    ConsoleScripts --> SanityScript
-    MakeTargets --> SanityScript
+    VerifyCLI --> VerifyScript[scripts/verify_checkpoints.py]
+    VerifyScript --> CheckpointDirectory[run checkpoint directory]
 
     ShellPreprocess --> Preprocess[src/data/preprocess.py]
     ShellProfile --> ProfileConfig[Load configs/profiler.yaml]
@@ -46,7 +51,7 @@ flowchart TD
     ShellSweep --> WandBSweep[wandb sweep configs/sweep.yaml]
 
     SanityScript --> SanityFlow[Sanity-only flow]
-    Main --> MainFlow[Train / Eval flow]
+    Main --> MainFlow[Train / Eval / Test / Predict / Profile flow]
     Preprocess --> TensorFiles[data/processed/*.pt]
     ProfileInline --> ProfileOutputs["profiler.trace_dir, default outputs/profiles"]
     WandBSweep --> Main
@@ -54,72 +59,88 @@ flowchart TD
 
 Notes:
 
-- `scripts/train.sh` is a thin wrapper around `uv run python src/main.py "$@"`; it can pass `--config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run` for replay.
+- `scripts/train.sh` is a thin wrapper around `uv run python src/main.py "$@"`; it can pass `--config-file outputs/run_configs/<run_id>/trial_<n>.yaml --run-id replayed_run` for replay.
 - `scripts/eval.sh` calls `src/main.py` with `run.mode=eval` and `checkpoint.resume=<path>`.
 - `scripts/run_sanity.py` only performs environment/config/smoke validation; it does not train.
 - `scripts/preprocess.sh` generates toy tensor-file data for `data=tensor_file`.
 - `scripts/profile.sh` loads `configs/profiler.yaml` and runs a small profiler workload outside the main trainer.
-- `scripts/run_registry.py`, `compare_runs.py`, `plot_metrics.py`, `evaluate_run.py`, `export_checkpoint.py`, and `cleanup_runs.py` read `outputs/run_registry.jsonl` to inspect, replay, evaluate, export, archive, or clean previous runs.
+- `scripts/run_registry.py`, `compare_runs.py`, `plot_metrics.py`, `evaluate_run.py`, `export_checkpoint.py`, and `cleanup_runs.py` use saved run metadata to inspect, replay, evaluate, export, archive, or clean previous runs. `scripts/verify_checkpoints.py` operates directly on a checkpoint directory.
 - `scripts/sweep.sh` creates a W&B sweep from `configs/sweep.yaml`, then each W&B agent run calls `src/main.py`.
-- `Makefile` targets mostly forward to the same Python or shell entrypoints.
+- `Makefile` targets mostly forward to the same Python entrypoints; its current `lint` and `fmt` targets cover `src`, `tests`, and `scripts/run_sanity.py`.
 
 ## Main Training And Evaluation Flow
 
 ```mermaid
 flowchart TD
-    Start[src/main.py Hydra entrypoint]
+    Start[src/main.py entrypoint]
 
-    Start --> Compose[Hydra composes configs/config.yaml plus overrides]
-    Compose --> DDP[setup_from_env: initialize DDP if torchrun env exists]
+    Start --> ConfigSource{Config source}
+    ConfigSource -->|Hydra groups and overrides| Compose[Compose configs/config.yaml]
+    ConfigSource -->|config file or run id| Replay[Load resolved YAML and scrub generated paths]
+    Compose --> DDP[setup_from_env]
+    Replay --> DDP
     DDP --> RunIdentity[src.utils.run.prepare_run]
 
     RunIdentity --> RunID[derive config_id and stable run_id]
     RunIdentity --> Paths[rewrite mode-specific artifact paths]
-    RunIdentity --> ConfigSnapshot["write training config under run_configs or eval config under evaluations"]
-    RunIdentity --> RegistryMap[append outputs/run_registry.jsonl with repeat command and cwd]
+    RunIdentity --> ConfigSnapshot[write resolved config snapshot]
+    RunIdentity --> RegistryMap[append outputs/run_registry.jsonl with command and cwd]
 
     Paths --> Seed[setup_reproducibility]
     Seed --> Dirs[make_output_dirs]
     Dirs --> RegistryBootstrap[bootstrap_registries]
     RegistryBootstrap --> Loggers[build_loggers]
+    Loggers --> Data[build_dataloaders]
 
-    Loggers --> Sanity[run_sanity_checks]
-    Sanity --> Data[build_dataloaders]
-    Sanity --> RegistryChecks[check registries, packages, disk, paths]
-
-    Data --> Model[MODEL_REGISTRY.build model]
+    Data --> Model[MODEL_REGISTRY.build and optional DDP wrap]
     Model --> Task[build_task]
     Task --> Optimizer[build_optimizer]
     Optimizer --> Scheduler[build_scheduler]
     Scheduler --> CheckpointManager[CheckpointManager]
-    CheckpointManager --> Trainer[Trainer]
+    CheckpointManager --> Trainer[Trainer with callbacks]
 
-    Trainer --> Mode{"run.mode"}
+    Trainer --> Mode{run.mode}
     Mode -->|train| Fit[trainer.fit]
-    Mode -->|eval| ResumeEval[trainer.resume + Evaluator]
+    Mode -->|profile| ProfileResume[trainer.resume: model-only when configured]
+    ProfileResume --> Profile[_profile_training]
+    Mode -->|eval/test/predict| Resume[trainer.resume]
 
     Fit --> TrainEpoch[train_epoch]
     TrainEpoch --> BatchLoop[forward / loss / backward / optimizer step]
-    BatchLoop --> StepScheduler[step scheduler if interval=step]
-    TrainEpoch --> Validation[Evaluator on val loader]
-    Validation --> EpochScheduler[step scheduler if interval=epoch]
-    Validation --> CheckpointSave[save last/best/epoch checkpoint]
-    CheckpointSave --> Test[trainer.test]
+    BatchLoop --> StepValidation[optional step validation]
+    StepValidation --> RestoreState[Restore model.train mode and training metric state]
+    RestoreState --> TrainEpoch
+    BatchLoop --> Validation[scheduled validation]
+    Validation --> SchedulerStep[epoch scheduler step]
+    SchedulerStep --> CheckpointSave[save epoch / last / best checkpoint]
+    CheckpointSave --> PostTrain{Run held-out test?}
+    PostTrain -->|test loader and not skipped| TrainTest[trainer.test]
+    PostTrain -->|no| Finish[loggers.finish and cleanup_distributed]
+    TrainTest --> TrainPredictions[write predictions when enabled after train]
+    TrainPredictions --> Finish
 
-    ResumeEval --> LoadCheckpoint[CheckpointManager.load or load_latest]
-    LoadCheckpoint --> EvalTest[Evaluator on test loader]
+    Resume --> LoadCheckpoint[load selected checkpoint when configured]
+    LoadCheckpoint --> EvalMode{eval/test/predict}
+    EvalMode -->|eval| EvalTest[held-out test metrics]
+    EvalMode -->|test| TestOnly[held-out test metrics]
+    EvalMode -->|predict| PredictOnly[prediction export]
+    EvalTest --> EvalPredictions[prediction export]
+    TestOnly --> Finish
+    PredictOnly --> Finish
+    EvalPredictions --> Finish
+    Fit --> PredictionShard[per-rank prediction records]
+    Resume --> PredictionShard
+    PredictionShard --> GatherPredictions[gather objects]
+    GatherPredictions -->|rank 0| EvalPredictions
 
-    Test --> Predictions[write predictions/test_predictions.json]
-    EvalTest --> Predictions
-    Predictions --> Finish[loggers.finish and cleanup_distributed]
+    Profile --> ProfileTrace[write profiler trace under run profiles]
+    ProfileTrace --> Finish
 
     Loggers --> ConsoleLog[console + logs/train.log]
     Loggers --> JsonlLog[logs/metrics.jsonl]
     Loggers --> TensorBoard[logs/tensorboard if enabled]
     Loggers --> WandB[W&B if enabled]
-
-    WandB --> WandBConfig["wandb.init config=resolved config"]
-    WandB --> WandBArtifact["log resolved config YAML artifact"]
+    WandB --> WandBConfig[resolved config and config artifact]
 ```
 
 ## Sanity Check Flow
@@ -159,53 +180,39 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    Config[Resolved config] --> Hash[config hash: run.config_id]
-    Config --> RunID[stable run.id]
-    RunID --> Mode{run.mode}
-    RunID --> Registry[outputs/run_registry.jsonl]
+    Config[Resolved config] --> Hash[run.config_id]
+    Hash --> StableID[stable run.id for fresh work]
+    StableID --> Fresh{fresh train/profile?}
+    Fresh -->|yes| NextTrial[atomically allocate next trial id]
+    NextTrial --> RunDir[outputs/runs/run.id/trial_n]
+    RunDir --> ConfigFile[outputs/run_configs/run.id/trial_n.yaml]
 
-    Mode -->|train| ConfigFile["outputs/run_configs/<run_id>.yaml"]
-    Mode -->|train| RunDir["outputs/runs/<run_id>/"]
-    Mode -->|eval/test/predict| EvalDir["outputs/evaluations/<run_id>/"]
-    EvalDir --> EvalConfig[config.yaml]
+    Checkpoint[checkpoint path] --> Parse[parse run id, trial id, checkpoint label]
+    Parse --> Resume{mode=train?}
+    Resume -->|yes| ExistingTrial[continue original run trial]
+    Resume -->|no| EvalTarget[outputs/evaluations/run.id/trial_n/mode_checkpoint]
+    EvalTarget --> Exists{target exists?}
+    Exists -->|yes| Replace[delete/recreate target and log red warning]
+    Exists -->|no| Create[create target]
 
-    RunDir --> Logs[logs/]
-    EvalDir --> Logs
-    Logs --> TrainLog[train.log]
-    Logs --> Metrics[metrics.jsonl]
-    Logs --> TB[tensorboard/ if enabled]
-
-    RunDir --> Checkpoints[checkpoints/]
-    Checkpoints --> Epoch[epoch_0001.pt]
-    Checkpoints --> Last[last.pt]
-    Checkpoints --> Best[best.pt]
-    Checkpoints --> Manifest[manifest.json]
-
-    RunDir --> Predictions[predictions/test_predictions.json]
-    EvalDir --> EvalPredictions[predictions/test_predictions.json]
-    RunDir --> Profiles[profiles/]
-    EvalDir --> EvalProfiles[profiles/]
-
-    RunID --> TrackingID["run.tracking_id"]
-    TrackingID --> WandB["W&B id and default name if enabled"]
-    ConfigFile --> WandBArtifact["W&B config artifact if enabled"]
-    EvalConfig --> WandBArtifact
+    RunDir --> Logs[logs, metrics, TensorBoard]
+    RunDir --> Checkpoints[checkpoints]
+    EvalTarget --> EvalArtifacts[config, logs, metrics, predictions]
+    StableID --> Registry[outputs/run_registry.jsonl]
+    NextTrial --> Registry
+    Parse --> Registry
 ```
 
 Key behavior:
 
-- The framework disables Hydra timestamp output folders in `configs/config.yaml`.
-- `run.id` starts from a deterministic base id for the same effective config.
-- Fresh-run collisions reuse the stable id and emit a warning; intentional training resumes suppress that warning.
-- `run.config_id` stays stable for identical configs, so repeated runs remain traceable to the same effective setup.
-- Use `run.trial=2` or an explicit `run.id` when you want a different planned base id.
-- `checkpoint.resume=latest` keeps the base id so checkpoint lookup targets the existing training run directory.
-- Evaluation preserves that id while changing `run.run_dir` to `outputs/evaluations/<run.id>/`.
-- `outputs/run_registry.jsonl` records train/profile/eval/test/predict configs, artifact directories, repeat commands, and command working directories.
-- `src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run` replays a saved resolved config after regenerating runtime artifact paths.
-- `src/main.py --from-run <run_id>` resolves that saved config through `outputs/run_registry.jsonl`.
-- `src/main.py --resume-run <run_id>` resolves the saved config, sets `checkpoint.resume=latest` unless overridden, and keeps `run.id=<run_id>` by default.
-- Run utility scripts can compare final/best metrics, plot metric histories, evaluate the best checkpoint, export checkpoints, and dry-run or perform cleanup of failed/incomplete runs.
+- Hydra timestamp output folders are disabled; `prepare_run` owns all generated paths.
+- Fresh repeated configs keep one stable run id and receive consecutive code-managed trial ids.
+- Users do not configure trial ids, tracking ids, or W&B run names.
+- Explicit checkpoint paths are the identity source for resume/evaluation.
+- Evaluation folders include mode and checkpoint label, so `eval_best`, `eval_last`, and `eval_epoch_0005` coexist.
+- Repeating one evaluation target replaces only that target folder and logs a bold red warning.
+- Tracking ids mirror local identity: `<run.id>-trial-<n>` or `<run.id>-trial-<n>-<mode>-<checkpoint>`.
+- `--config-file`/`--from-run` are fresh replays and allocate a new trial; `--resume-run` resolves an explicit checkpoint and rejects `--run-id`.
 
 ## Registry And Component Flow
 
@@ -339,7 +346,7 @@ Edit:
 Expected path:
 
 ```text
-Hydra config -> prepare_run -> run.id/config_id/run_dir -> loggers/checkpoints/predictions/W&B
+Hydra config or checkpoint path -> prepare_run -> run.id/trial_id/run_dir -> loggers/checkpoints/predictions/W&B
 ```
 
 ### Change Sanity Checks
@@ -354,7 +361,7 @@ Edit:
 Expected path:
 
 ```text
-scripts/run_sanity.py or src/main.py -> prepare_run -> run_sanity_checks -> SANITY CHECK REPORT
+scripts/run_sanity.py -> prepare_run -> run_sanity_checks -> SANITY CHECK REPORT
 ```
 
 ### Change W&B Behavior
@@ -368,7 +375,7 @@ Edit:
 Expected path:
 
 ```text
-logging.wandb.* + run.id -> WandBLogger -> wandb.init(config=resolved_config) -> config artifact
+run.id + trial_id + mode/checkpoint -> generated tracking_id -> WandBLogger -> config artifact
 ```
 
 ## Minimal Debug Checklist
@@ -376,9 +383,9 @@ logging.wandb.* + run.id -> WandBLogger -> wandb.init(config=resolved_config) ->
 When something breaks, follow this order:
 
 1. Check composed config: `uv run python scripts/run_sanity.py +experiment=sanity_cpu sanity.check_all_experiments=true`.
-2. Check the run id and config snapshot under `outputs/run_configs/<run_id>.yaml`.
+2. Check the run id and config snapshot under `outputs/run_configs/<run_id>/trial_<n>.yaml`.
 3. Check `outputs/run_registry.jsonl` for the config-to-run mapping, repeat command, and command working directory.
-4. Check local logs under `outputs/runs/<run_id>/logs/`.
-5. Check checkpoints under `outputs/runs/<run_id>/checkpoints/`.
+4. Check local logs under `outputs/runs/<run_id>/trial_<n>/logs/`.
+5. Check checkpoints under `outputs/runs/<run_id>/trial_<n>/checkpoints/`.
 6. Run focused tests for the component you changed.
 7. Run the full validation checklist from `README.md`.

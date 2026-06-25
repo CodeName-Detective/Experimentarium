@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.losses import build_loss
 from src.metrics import MetricCollection
+from src.runtime.distributed import reduce_sum_count
 from src.utils.config import cfg_get
 from src.utils.registry import TASK_REGISTRY, register_task
 
@@ -34,6 +35,7 @@ class StepResult:
     outputs: dict[str, Any] = field(default_factory=dict)
     targets: Tensor | None = None
     artifacts: dict[str, Any] = field(default_factory=dict)
+    loss_weight: int | float | None = None
 
 
 class BaseTask:
@@ -70,6 +72,22 @@ class BaseTask:
         """Compute accumulated task metrics."""
         return self.metrics.compute()
 
+    def compute_metrics_distributed(self, device: Any = 'cpu') -> dict[str, float]:
+        """Compute metrics from globally reduced weighted totals."""
+        metrics: dict[str, float] = {}
+        for name, (total, count) in self.metrics.totals().items():
+            global_total, global_count = reduce_sum_count(total, count, device=device)
+            metrics[name] = global_total / max(1.0, global_count)
+        return metrics
+
+    def metric_state_dict(self) -> dict[str, Any]:
+        """Capture metric state so evaluation can be side-effect free."""
+        return {'metrics': self.metrics.state_dict()}
+
+    def load_metric_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore metric state captured before evaluation."""
+        self.metrics.load_state_dict(state.get('metrics', {}))
+
     def predict_records(self, outputs: dict[str, Any], batch: dict[str, Any]) -> list[dict[str, Any]]:
         """Convert model outputs into serializable prediction records."""
         return []
@@ -94,7 +112,7 @@ class ClassificationTask(BaseTask):
         if loss is None:
             loss = self.loss_fn(logits, targets)
         self.metrics.update(logits.detach(), targets.detach(), n=targets.shape[0])
-        return StepResult(loss=loss, outputs=outputs, targets=targets)
+        return StepResult(loss=loss, outputs=outputs, targets=targets, loss_weight=targets.shape[0])
 
     def predict_records(self, outputs: dict[str, Tensor], batch: dict[str, Tensor]) -> list[dict[str, Any]]:
         """Create classification prediction records."""
@@ -124,7 +142,7 @@ class RegressionTask(BaseTask):
         if loss is None:
             loss = self.loss_fn(preds.float(), targets)
         self.metrics.update(preds.detach(), targets.detach(), n=targets.shape[0])
-        return StepResult(loss=loss, outputs=outputs, targets=targets)
+        return StepResult(loss=loss, outputs=outputs, targets=targets, loss_weight=targets.shape[0])
 
 
 def build_task(cfg: ConfigType) -> BaseTask:

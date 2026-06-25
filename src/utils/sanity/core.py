@@ -32,6 +32,7 @@ from urllib.parse import urlparse
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from src.runtime.distributed import is_rank0
 from src.utils.config import cfg_get
 from src.utils.sanity.cuda import collect_cuda_diagnostics, format_torch_install_recommendation, recommend_torch_install
 
@@ -147,7 +148,7 @@ def _load_toml(path: Path) -> dict[str, Any]:
         import tomllib
     except ModuleNotFoundError:
         try:
-            import tomli as tomllib  # type: ignore[no-redef]
+            import tomli as tomllib  # type: ignore[import-not-found,no-redef]
         except ModuleNotFoundError:
             return _parse_pyproject_fallback(path)
     with path.open('rb') as handle:
@@ -394,6 +395,73 @@ def _check_config_keys(report: SanityReport, cfg: Any) -> None:
         ]
     for key in required:
         report.add(f'config.{key}', cfg_get(cfg, key, None) is not None, f'missing {key}')
+
+
+def _check_config_values(report: SanityReport, cfg: Any) -> None:
+    """Validate cross-field runtime values, not only key presence."""
+    from src.engine.precision import SUPPORTED_PRECISIONS
+
+    mode = str(cfg_get(cfg, 'run.mode', 'train')).lower()
+    report.add(
+        'config_value.run.mode', mode in {'train', 'eval', 'test', 'predict', 'profile'}, f'invalid mode: {mode}'
+    )
+    precision = str(cfg_get(cfg, 'run.precision', 'fp32')).lower()
+    report.add(
+        'config_value.run.precision',
+        precision in SUPPORTED_PRECISIONS,
+        f'expected one of {sorted(SUPPORTED_PRECISIONS)}; found {precision}',
+    )
+    checkpoint_mode = str(cfg_get(cfg, 'checkpoint.mode', 'min')).lower()
+    report.add('config_value.checkpoint.mode', checkpoint_mode in {'min', 'max'}, f'invalid mode: {checkpoint_mode}')
+    numeric_checks = {
+        'checkpoint.save_every': 1,
+        'checkpoint.keep_last_k': 0,
+        'checkpoint.save_top_k': 0,
+        'trainer.max_epochs': 1,
+        'trainer.accumulate_grad_batches': 1,
+        'trainer.log_every_n_steps': 1,
+        'trainer.val_every_n_epochs': 1,
+        'trainer.val_every_n_steps': 0,
+    }
+    for key, minimum in numeric_checks.items():
+        raw_value = cfg_get(cfg, key, minimum)
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            report.add(f'config_value.{key}', False, f'must be an integer; found {raw_value!r}')
+            continue
+        report.add(f'config_value.{key}', value >= minimum, f'must be >= {minimum}; found {value}')
+    max_steps = cfg_get(cfg, 'trainer.max_steps', None)
+    if max_steps is not None and str(max_steps).lower() not in {'none', 'null'}:
+        try:
+            max_steps_valid = int(max_steps) > 0
+        except (TypeError, ValueError):
+            max_steps_valid = False
+        report.add(
+            'config_value.trainer.max_steps',
+            max_steps_valid,
+            f'must be a positive integer or null; found {max_steps!r}',
+        )
+    scheduler_name = str(cfg_get(cfg, 'scheduler.name', 'none')).lower()
+    scheduler_interval = str(cfg_get(cfg, 'scheduler.interval', 'epoch')).lower()
+    report.add(
+        'config_value.scheduler.interval',
+        scheduler_interval in {'epoch', 'step'},
+        f'invalid interval: {scheduler_interval}',
+    )
+    if scheduler_name == 'plateau':
+        report.add(
+            'config_value.scheduler.plateau_interval',
+            scheduler_interval == 'epoch',
+            'ReduceLROnPlateau requires scheduler.interval=epoch',
+        )
+        monitor = str(cfg_get(cfg, 'scheduler.monitor', '')).strip()
+        report.add('config_value.scheduler.monitor', bool(monitor), 'plateau scheduler requires a monitor key')
+        report.add(
+            'config_value.scheduler.plateau_warmup',
+            not bool(cfg_get(cfg, 'scheduler.warmup.enabled', False)),
+            'ReduceLROnPlateau cannot be wrapped by the configured warmup scheduler',
+        )
 
 
 def _torch_install_recommend_mode(cfg: Any) -> bool:
@@ -651,8 +719,12 @@ def _cuda_driver_message(diagnostics: Any) -> str:
 def _check_output_dirs(report: SanityReport, cfg: Any) -> None:
     paths = {
         'run.output_dir': cfg_get(cfg, 'run.output_dir', 'outputs'),
+        'run.run_dir': cfg_get(cfg, 'run.run_dir', 'outputs/runs'),
+        'run.evaluations_dir': cfg_get(cfg, 'run.evaluations_dir', 'outputs/evaluations'),
+        'run.config_dir': cfg_get(cfg, 'run.config_dir', 'outputs/run_configs'),
         'run.log_dir': cfg_get(cfg, 'run.log_dir', 'outputs/logs'),
         'run.prediction_dir': cfg_get(cfg, 'run.prediction_dir', 'outputs/predictions'),
+        'run.profile_dir': cfg_get(cfg, 'run.profile_dir', 'outputs/profiles'),
         'checkpoint.dir': cfg_get(cfg, 'checkpoint.dir', 'outputs/checkpoints'),
     }
     for key, value in paths.items():
@@ -669,7 +741,7 @@ def _check_output_dirs(report: SanityReport, cfg: Any) -> None:
 
 def _check_disk(report: SanityReport, cfg: Any) -> None:
     min_gb = float(cfg_get(cfg, 'sanity.min_disk_gb', 1.0))
-    free_gb = shutil.disk_usage('.').free / (1024**3)
+    free_gb = shutil.disk_usage(Path(str(cfg_get(cfg, 'run.output_dir', 'outputs')))).free / (1024**3)
     report.add(
         'disk.free_space', free_gb >= min_gb, f'{free_gb:.1f}GB free; need {min_gb:.1f}GB', warning=free_gb < min_gb
     )
@@ -718,7 +790,9 @@ def _check_data_model_smoke(report: SanityReport, cfg: Any) -> None:
 
         from src.data import build_dataloaders
         from src.engine.evaluator import move_to_device
+        from src.engine.precision import precision_autocast, scaler_enabled
         from src.optim import build_optimizer, build_scheduler
+        from src.optim.schedulers import scheduler_step
         from src.tasks import build_task
         from src.utils.registry import MODEL_REGISTRY
 
@@ -726,23 +800,41 @@ def _check_data_model_smoke(report: SanityReport, cfg: Any) -> None:
         if device.type == 'cuda' and not torch.cuda.is_available():
             report.add('smoke.device', False, f'{device} requested but torch.cuda.is_available() is False')
             return
-        report.add('smoke.device', True, f'device={device}', always_show=True)
+        precision = str(cfg_get(cfg, 'run.precision', 'fp32'))
+        if device.type == 'cuda' and precision.lower() == 'bf16' and not torch.cuda.is_bf16_supported():
+            report.add('smoke.precision', False, 'bf16 requested but the CUDA device does not support bf16')
+            return
+        report.add('smoke.device', True, f'device={device}; precision={precision}', always_show=True)
         loaders = build_dataloaders(cfg)
         batch = move_to_device(next(iter(loaders['train'])), device)
         model = MODEL_REGISTRY.build(str(cfg_get(cfg, 'model.name', 'mlp')), cfg_get(cfg, 'model')).to(device)
         task = build_task(cfg)
-        result = task.step(model, batch, stage='sanity')
-        finite_loss = result.loss is not None and torch.isfinite(result.loss.detach()).item()
-        report.add('smoke.forward_loss', finite_loss, 'loss missing or non-finite')
-        if result.loss is not None:
-            result.loss.backward()
-        grad_ok = any(
-            p.grad is not None and torch.isfinite(p.grad).all().item() for p in model.parameters() if p.requires_grad
-        )
-        report.add('smoke.backward_gradients', grad_ok, 'no finite gradients found')
         optimizer = build_optimizer(model, cfg)
         scheduler = build_scheduler(cfg, optimizer, steps_per_epoch=max(1, len(loaders['train'])))
-        report.add('smoke.optimizer_scheduler', optimizer is not None and scheduler is not None)
+        scaler = torch.amp.GradScaler('cuda', enabled=scaler_enabled(device, precision))
+        optimizer.zero_grad(set_to_none=True)
+        with precision_autocast(device, precision):
+            result = task.step(model, batch, stage='sanity')
+        finite_loss = result.loss is not None and bool(torch.isfinite(result.loss.detach()).item())
+        report.add('smoke.forward_loss', finite_loss, 'loss missing or non-finite')
+        if not finite_loss:
+            return
+        if result.loss is not None:
+            scaler.scale(result.loss).backward()
+        grad_ok = any(
+            parameter.grad is not None and torch.isfinite(parameter.grad).all().item()
+            for parameter in model.parameters()
+            if parameter.requires_grad
+        )
+        report.add('smoke.backward_gradients', grad_ok, 'no finite gradients found')
+        scaler.step(optimizer)
+        scaler.update()
+        if scheduler.scheduler is not None:
+            metric = (
+                float(result.loss.detach().cpu()) if scheduler.name == 'plateau' and result.loss is not None else None
+            )
+            scheduler_step(scheduler, metric)
+        report.add('smoke.optimizer_scheduler_step', True)
     except Exception as exc:
         report.add('smoke.data_model', False, str(exc), warning=_torch_missing_in_recommend_mode(cfg, exc))
 
@@ -793,6 +885,7 @@ def run_sanity_checks(
         _check_python,
         _check_packages,
         _check_config_keys,
+        _check_config_values,
         _check_runtime,
         _check_wandb_runtime,
         _check_output_dirs,
@@ -806,7 +899,8 @@ def run_sanity_checks(
         checks.extend(extra_checks)
     for check in checks:
         check(report, cfg)
-    report.print_summary()
+    if is_rank0():
+        report.print_summary()
     if strict and report.failures:
         raise RuntimeError(f'Sanity checks failed: {[result.name for result in report.failures]}')
     return report

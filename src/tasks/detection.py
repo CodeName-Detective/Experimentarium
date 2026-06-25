@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
+from src.runtime.distributed import all_gather_objects
 from src.tasks.task import BaseTask, StepResult
 from src.utils.config import cfg_get
 from src.utils.registry import register_task
@@ -26,21 +27,40 @@ class DetectionTask(BaseTask):
         self.score_threshold = float(cfg_get(cfg, 'score_threshold', 0.05))
         self.nms_iou_threshold = float(cfg_get(cfg, 'nms_iou_threshold', 0.5))
         self.metric_names = set(cfg_get(cfg, 'metrics', []) or [])
-        self._ap50_total = 0.0
-        self._ap50_count = 0
+        self.metrics.metrics.pop('map50', None)
+        self._map_records: list[dict[str, torch.Tensor]] = []
 
     def reset_metrics(self) -> None:
         """Reset detection-specific metrics."""
         super().reset_metrics()
-        self._ap50_total = 0.0
-        self._ap50_count = 0
+        self._map_records = []
 
     def compute_metrics(self) -> dict[str, float]:
-        """Return detection metrics computed from structured predictions."""
+        """Return dataset-level detection metrics."""
         metrics = super().compute_metrics()
-        if 'map50' in self.metric_names and self._ap50_count:
-            metrics['map50'] = self._ap50_total / self._ap50_count
+        if 'map50' in self.metric_names:
+            metrics['map50'] = self._mean_ap50(self._map_records)
         return metrics
+
+    def compute_metrics_distributed(self, device: Any = 'cpu') -> dict[str, float]:
+        """Compute mAP@50 after gathering detection records from every rank."""
+        metrics = super().compute_metrics_distributed(device=device)
+        if 'map50' in self.metric_names:
+            gathered = all_gather_objects(self._map_records)
+            records = [record for rank_records in gathered for record in rank_records]
+            metrics['map50'] = self._mean_ap50(records)
+        return metrics
+
+    def metric_state_dict(self) -> dict[str, Any]:
+        """Snapshot generic and detection-specific metric accumulators."""
+        state = super().metric_state_dict()
+        state['map_records'] = list(self._map_records)
+        return state
+
+    def load_metric_state_dict(self, state: dict[str, Any]) -> None:
+        """Restore generic and detection-specific metric accumulators."""
+        super().load_metric_state_dict(state)
+        self._map_records = list(state.get('map_records', []))
 
     def step(self, model: nn.Module, batch: dict[str, Any], stage: str) -> StepResult:
         """Aggregate model-provided detection losses for training."""
@@ -54,58 +74,104 @@ class DetectionTask(BaseTask):
         count_targets = torch.empty(batch_size, device=device or torch.device('cpu'))
         artifacts = {'loss_components': loss_components} if loss_components else {}
         self._update_detection_metrics(output_dict, batch)
-        return StepResult(loss=loss, outputs=output_dict, targets=count_targets, artifacts=artifacts)
+        return StepResult(
+            loss=loss, outputs=output_dict, targets=count_targets, artifacts=artifacts, loss_weight=batch_size
+        )
 
     def _update_detection_metrics(self, outputs: dict[str, Any], batch: dict[str, Any]) -> None:
         if 'map50' not in self.metric_names:
             return
         detections = outputs.get(self.output_key)
         targets = batch.get(self.target_key)
-        if detections is None or targets is None:
-            return
         if isinstance(detections, Mapping):
             detections = [detections]
         if not isinstance(detections, (list, tuple)) or not isinstance(targets, (list, tuple)):
             return
         for detection, target in zip(detections, targets, strict=False):
-            if isinstance(detection, Mapping) and isinstance(target, Mapping):
-                self._ap50_total += self._ap50(detection, target)
-                self._ap50_count += 1
+            if not isinstance(detection, Mapping) or not isinstance(target, Mapping):
+                continue
+            pred_boxes = detection.get('boxes')
+            pred_scores = detection.get('scores')
+            target_boxes = target.get('boxes')
+            if not all(torch.is_tensor(value) for value in (pred_boxes, pred_scores, target_boxes)):
+                continue
+            pred_boxes = cast('torch.Tensor', pred_boxes)
+            pred_scores = cast('torch.Tensor', pred_scores)
+            target_boxes = cast('torch.Tensor', target_boxes)
+            pred_labels = detection.get('labels')
+            target_labels = target.get('labels')
+            if not torch.is_tensor(pred_labels):
+                pred_labels = torch.zeros(pred_boxes.shape[0], dtype=torch.long, device=pred_boxes.device)
+            if not torch.is_tensor(target_labels):
+                target_labels = torch.zeros(target_boxes.shape[0], dtype=torch.long, device=target_boxes.device)
+            self._map_records.append({
+                'pred_boxes': pred_boxes.detach().float().cpu(),
+                'pred_scores': pred_scores.detach().float().cpu(),
+                'pred_labels': pred_labels.detach().long().cpu(),
+                'target_boxes': target_boxes.detach().float().cpu(),
+                'target_labels': target_labels.detach().long().cpu(),
+            })
 
-    def _ap50(self, detection: Mapping[str, Any], target: Mapping[str, Any]) -> float:
-        pred_boxes = detection.get('boxes')
-        pred_scores = detection.get('scores')
-        pred_labels = detection.get('labels')
-        target_boxes = target.get('boxes')
-        target_labels = target.get('labels')
-        if not all(torch.is_tensor(value) for value in (pred_boxes, pred_scores, target_boxes)):
+    def _mean_ap50(self, records: list[dict[str, torch.Tensor]]) -> float:
+        classes = sorted({int(label) for record in records for label in record['target_labels'].tolist()})
+        if not classes:
             return 0.0
-        if pred_boxes.numel() == 0 or target_boxes.numel() == 0:
+        return sum(self._class_ap50(records, class_id) for class_id in classes) / len(classes)
+
+    def _class_ap50(self, records: list[dict[str, torch.Tensor]], class_id: int) -> float:
+        targets: dict[int, torch.Tensor] = {}
+        predictions: list[tuple[float, int, torch.Tensor]] = []
+        target_count = 0
+        for image_index, record in enumerate(records):
+            target_boxes = record['target_boxes'][record['target_labels'] == class_id]
+            targets[image_index] = target_boxes
+            target_count += int(target_boxes.shape[0])
+            mask = record['pred_labels'] == class_id
+            for score, box in zip(record['pred_scores'][mask], record['pred_boxes'][mask], strict=False):
+                predictions.append((float(score), image_index, box))
+        if target_count == 0:
             return 0.0
-        if not torch.is_tensor(pred_labels):
-            pred_labels = torch.zeros(pred_boxes.shape[0], dtype=torch.long, device=pred_boxes.device)
-        if not torch.is_tensor(target_labels):
-            target_labels = torch.zeros(target_boxes.shape[0], dtype=torch.long, device=target_boxes.device)
-        order = pred_scores.argsort(descending=True)
-        matched: set[int] = set()
-        precisions: list[float] = []
-        true_positives = 0
-        for rank, pred_idx in enumerate(order, start=1):
-            same_label = torch.nonzero(target_labels == pred_labels[pred_idx], as_tuple=False).flatten()
-            best_iou = 0.0
-            best_target = -1
-            for target_idx in same_label.tolist():
-                if target_idx in matched:
-                    continue
-                iou = float(self._box_iou(pred_boxes[pred_idx], target_boxes[target_idx]).item())
-                if iou > best_iou:
-                    best_iou = iou
-                    best_target = target_idx
-            if best_iou >= 0.5 and best_target >= 0:
-                matched.add(best_target)
-                true_positives += 1
-                precisions.append(true_positives / rank)
-        return sum(precisions) / max(1, int(target_boxes.shape[0]))
+        predictions.sort(key=lambda item: item[0], reverse=True)
+        matched = {index: torch.zeros(len(boxes), dtype=torch.bool) for index, boxes in targets.items()}
+        true_positive: list[float] = []
+        false_positive: list[float] = []
+        for _, image_index, box in predictions:
+            target_boxes = targets[image_index]
+            available = ~matched[image_index]
+            if target_boxes.numel() == 0 or not available.any():
+                true_positive.append(0.0)
+                false_positive.append(1.0)
+                continue
+            ious = self._box_iou_many(box, target_boxes)
+            ious[~available] = -1.0
+            best_iou, best_index = ious.max(dim=0)
+            if float(best_iou) >= 0.5:
+                matched[image_index][best_index] = True
+                true_positive.append(1.0)
+                false_positive.append(0.0)
+            else:
+                true_positive.append(0.0)
+                false_positive.append(1.0)
+        if not predictions:
+            return 0.0
+        tp = torch.tensor(true_positive).cumsum(0)
+        fp = torch.tensor(false_positive).cumsum(0)
+        recall = tp / target_count
+        precision = tp / (tp + fp).clamp_min(torch.finfo(torch.float32).eps)
+        recall = torch.cat([torch.tensor([0.0]), recall, torch.tensor([1.0])])
+        precision = torch.cat([torch.tensor([0.0]), precision, torch.tensor([0.0])])
+        for index in range(precision.numel() - 2, -1, -1):
+            precision[index] = torch.maximum(precision[index], precision[index + 1])
+        changing = torch.nonzero(recall[1:] != recall[:-1], as_tuple=False).flatten()
+        return float(((recall[changing + 1] - recall[changing]) * precision[changing + 1]).sum().item())
+
+    def _box_iou_many(self, box: Tensor, others: Tensor) -> Tensor:
+        top_left = torch.maximum(box[:2], others[:, :2])
+        bottom_right = torch.minimum(box[2:], others[:, 2:])
+        intersection = (bottom_right - top_left).clamp(min=0).prod(dim=1)
+        area = (box[2:] - box[:2]).clamp(min=0).prod()
+        other_area = (others[:, 2:] - others[:, :2]).clamp(min=0).prod(dim=1)
+        return intersection / (area + other_area - intersection).clamp(min=torch.finfo(torch.float32).eps)
 
     def _box_iou(self, box: Tensor, other: Tensor) -> Tensor:
         top_left = torch.maximum(box[:2], other[:2])

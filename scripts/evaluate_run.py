@@ -14,20 +14,20 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from src.utils.run_inspect import DEFAULT_REGISTRY_PATH, config_path_for_run
+from src.utils.run_inspect import DEFAULT_REGISTRY_PATH, checkpoint_path_for_run, config_path_for_run
 
 
 def build_command(args: argparse.Namespace) -> list[str]:
     """Build the Python command used to evaluate a saved run."""
-    config_path = config_path_for_run(args.run_id, args.registry)
+    config_path = config_path_for_run(args.run_id, args.registry, mode='train')
+    checkpoint_path = checkpoint_path_for_run(args.run_id, args.checkpoint, args.registry)
     command = [
         sys.executable,
         str(ROOT / 'src' / 'main.py'),
         '--config-file',
         str(config_path),
-        f'run.id={args.run_id}',
         f'run.mode={args.mode}',
-        f'checkpoint.resume={args.checkpoint}',
+        f'checkpoint.resume={checkpoint_path}',
     ]
     command.extend(args.overrides or [])
     return command
@@ -56,9 +56,14 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse options and trailing config overrides in any order."""
+    return build_parser().parse_intermixed_args(argv)
+
+
 def main() -> None:
     """Run the evaluate-run CLI."""
-    args = build_parser().parse_args()
+    args = parse_args()
     command = build_command(args)
     if args.print_only:
         print(printable_command(command))

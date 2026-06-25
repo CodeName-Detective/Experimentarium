@@ -24,8 +24,9 @@ Typical usage:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from torch.optim.lr_scheduler import (
     ConstantLR,
@@ -202,7 +203,7 @@ def build_plateau(
     """Build a metric-driven plateau scheduler."""
     return ReduceLROnPlateau(
         optimizer,
-        mode=str(cfg_get(cfg, 'mode', 'min')),
+        mode=cast("Literal['min', 'max']", str(cfg_get(cfg, 'mode', 'min'))),
         factor=float(cfg_get(cfg, 'factor', 0.5)),
         patience=int(cfg_get(cfg, 'patience', 5)),
         threshold=float(cfg_get(cfg, 'threshold', 1e-4)),
@@ -243,7 +244,7 @@ def build_onecycle(
         max_lr=float(max_lr),
         total_steps=max(1, total_steps),
         pct_start=float(cfg_get(cfg, 'pct_start', 0.3)),
-        anneal_strategy=str(cfg_get(cfg, 'anneal_strategy', 'cos')),
+        anneal_strategy=cast("Literal['cos', 'linear']", str(cfg_get(cfg, 'anneal_strategy', 'cos'))),
     )
 
 
@@ -278,9 +279,23 @@ def build_scheduler(cfg: ConfigType, optimizer: Optimizer, steps_per_epoch: int)
     if interval not in {'epoch', 'step'}:
         raise ValueError(f"scheduler.interval must be 'epoch' or 'step', got {interval!r}")
     epochs = int(cfg_get(cfg, 'trainer.max_epochs', cfg_get(cfg, 'trainer.epochs', 1)))
-    total_steps = max(1, steps_per_epoch * epochs)
-    scheduler = SCHEDULER_REGISTRY.build(name, optimizer, scheduler_cfg, total_steps, epochs)
-    if name != 'onecycle':
+    configured_limit = cfg_get(cfg, 'trainer.limit_train_batches', None)
+    effective_batches = _effective_batch_count(steps_per_epoch, configured_limit)
+    accumulation = max(1, int(cfg_get(cfg, 'trainer.accumulate_grad_batches', 1)))
+    optimizer_steps_per_epoch = max(1, math.ceil(effective_batches / accumulation))
+    total_steps = max(1, optimizer_steps_per_epoch * epochs)
+    max_steps = cfg_get(cfg, 'trainer.max_steps', None)
+    if max_steps is not None and str(max_steps).lower() not in {'none', 'null'}:
+        total_steps = min(total_steps, max(1, int(max_steps)))
+    warmup = cfg_get(scheduler_cfg, 'warmup', {})
+    warmup_enabled = bool(cfg_get(warmup, 'enabled', False)) and name != 'onecycle'
+    warmup_steps = max(0, int(cfg_get(warmup, 'steps', 100))) if warmup_enabled else 0
+    if warmup_enabled and name == 'plateau':
+        raise ValueError('scheduler warmup is not supported with ReduceLROnPlateau')
+    scheduler_steps = max(1, total_steps - warmup_steps) if interval == 'step' else total_steps
+    scheduler_epochs = max(1, epochs - warmup_steps) if interval == 'epoch' else epochs
+    scheduler = SCHEDULER_REGISTRY.build(name, optimizer, scheduler_cfg, scheduler_steps, scheduler_epochs)
+    if warmup_enabled:
         scheduler = _with_warmup(optimizer, scheduler, scheduler_cfg, total_steps)
     return SchedulerBundle(
         scheduler=scheduler,
@@ -289,6 +304,28 @@ def build_scheduler(cfg: ConfigType, optimizer: Optimizer, steps_per_epoch: int)
         name=name,
         description=SCHEDULER_DESCRIPTIONS.get(name, 'Custom scheduler registered by the user.'),
     )
+
+
+def _effective_batch_count(steps_per_epoch: int, configured: Any) -> int:
+    """Resolve trainer batch limits to the number of batches seen per epoch."""
+    if configured is None:
+        return max(0, steps_per_epoch)
+    if isinstance(configured, str):
+        normalized = configured.lower()
+        if normalized in {'none', 'null'}:
+            return max(0, steps_per_epoch)
+        if any(marker in normalized for marker in ('.', 'e')):
+            value = float(configured)
+            if 0.0 < value <= 1.0:
+                return max(1, math.ceil(steps_per_epoch * value))
+            return min(max(0, int(value)), max(0, steps_per_epoch))
+        return min(max(0, int(configured)), max(0, steps_per_epoch))
+    if isinstance(configured, int) and not isinstance(configured, bool):
+        return min(max(0, configured), max(0, steps_per_epoch))
+    value = float(configured)
+    if 0.0 < value <= 1.0:
+        return max(1, math.ceil(steps_per_epoch * value))
+    return min(max(0, int(value)), max(0, steps_per_epoch))
 
 
 def scheduler_step(bundle: SchedulerBundle, metric: float | None = None) -> None:

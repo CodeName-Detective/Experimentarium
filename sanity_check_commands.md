@@ -25,8 +25,9 @@ smoke test unless you disable it.
 
 - `PASS`: the check passed.
 - `WARN`: the check found a non-blocking issue.
-- `FAIL`: the check found a blocking issue. With `sanity.strict=true`, failures
-  raise an error and the command exits unsuccessfully.
+- `FAIL`: the check found a blocking issue. With `sanity.strict=true`, failures raise an error and the command exits unsuccessfully.
+
+The default config uses `sanity.strict=true`, so a hard failure makes the explicit sanity command exit unsuccessfully. Normal train, resume, profile, eval, test, and predict commands do not run sanity checks automatically.
 
 Package severity comes from `pyproject.toml`:
 
@@ -52,6 +53,8 @@ on:
 - `src/main.py +experiment=sanity_gpu`: full trainer path on GPU, not just the sanity checker.
 - `sanity.check_all_experiments=true`: config composition coverage for every experiment YAML.
 - `sanity.wandb.check=true`: W&B import, login/API-key, and network readiness checks.
+
+Experiment composition checks verify Hydra syntax. The active composed configuration additionally validates mode, precision, checkpoint policy, scheduler interval and monitor requirements, positive trainer counts, artifact-directory writability, and free space on the `run.output_dir` filesystem.
 
 You do not need to run both `sanity.cuda.check_driver=true` and
 `+experiment=sanity_gpu` every time. Run the standalone CUDA diagnostic when you
@@ -302,7 +305,7 @@ the normal composed trainer stack, use the main entrypoint:
 uv run python src/main.py run.mode=profile profiler.active_steps=3 profiler.warmup_steps=1
 ```
 
-This writes traces under `outputs/runs/<run.id>/profiles/`. For alternate standalone wrapper settings, either edit `configs/profiler.yaml` or run `PROFILE_CONFIG=<path> bash scripts/profile.sh`.
+This writes traces under `outputs/runs/<run.id>/trial_<n>/profiles/`. For alternate standalone wrapper settings, either edit `configs/profiler.yaml` or run `PROFILE_CONFIG=<path> bash scripts/profile.sh`.
 
 ## Run-Specific Overrides
 
@@ -321,6 +324,8 @@ data, task, optimizer, scheduler, output paths, and smoke-test behavior.
 uv run python scripts/run_sanity.py run.device=cuda run.precision=amp sanity.strict=true
 ```
 
+The smoke test enters the configured precision context and performs backward, optimizer, and scheduler steps. Unsupported precision names fail during config-value validation; CUDA bf16 requests also verify device support. Plateau schedulers must use epoch intervals and cannot enable the generic warmup wrapper.
+
 Checks that the selected runtime settings are compatible with the machine before
 using the same overrides for training.
 
@@ -330,40 +335,25 @@ using the same overrides for training.
 uv run python scripts/run_sanity.py run.id=my_debug_sanity_run
 ```
 
-Uses a predictable run ID so the generated sanity output directory is easy to
-find. If the ID already exists, the framework reuses that directory and emits a
-warning before appending new artifacts there.
+Uses a predictable stable run ID so the generated sanity output directory is easy to find. The standalone command receives the next code-managed trial for repeated invocations.
 
-## Training Entry Sanity
+## Normal Training After Explicit Sanity
 
-### Run Main With The CPU Sanity Experiment
+`src/main.py` never runs the sanity suite automatically. This applies to fresh training, resume, profile, eval, test, and predict modes. Run the standalone command first when validation is needed:
 
 ```bash
+uv run python scripts/run_sanity.py +experiment=sanity_cpu
 uv run python src/main.py +experiment=sanity_cpu
 ```
 
-This is different from `scripts/run_sanity.py`: it runs the normal training
-entrypoint after pre-flight checks. Use it when you want to verify that the full
-trainer, logger, checkpoint, and evaluator path works end to end on CPU.
-
-### Run Main With The GPU Sanity Experiment
+The first command runs `run_sanity_checks()`. The second command runs only the normal tiny CPU trainer workflow. Likewise for CUDA:
 
 ```bash
+uv run python scripts/run_sanity.py +experiment=sanity_gpu
 uv run python src/main.py +experiment=sanity_gpu
 ```
 
-Runs the full trainer, validation, test, checkpoint, logger, and prediction path
-on CUDA using a tiny synthetic workload. Use this after the CUDA driver sanity
-check passes.
-
-### Train On CUDA After Sanity Checks
-
-```bash
-uv run python src/main.py +experiment=baseline run.device=cuda sanity.strict=true
-```
-
-The main entrypoint runs sanity checks before training. Use strict mode so broken
-required checks stop the training run immediately.
+The first command checks CUDA/driver/runtime health; the second performs tiny GPU training without repeating those checks. Settings such as `sanity.strict=true` affect the explicit sanity command only.
 
 ## Recommended New-Machine Sequence
 

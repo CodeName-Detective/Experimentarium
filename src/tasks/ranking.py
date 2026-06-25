@@ -38,7 +38,7 @@ class RankingTask(BaseTask):
         if loss is None:
             loss = self.loss_fn(scores, targets)
         self.metrics.update(scores.detach(), targets.detach(), n=targets.shape[0])
-        return StepResult(loss=loss, outputs=outputs, targets=targets)
+        return StepResult(loss=loss, outputs=outputs, targets=targets, loss_weight=targets.shape[0])
 
     def predict_records(self, outputs: dict[str, Any], batch: dict[str, Any]) -> list[dict[str, Any]]:
         """Export scores, relevance labels, and descending item order."""

@@ -2,7 +2,7 @@
 
 Use this guide when training feels slower than expected, GPU utilization is low, memory use is surprising, or a model/data change needs performance investigation. The profiler answers a specific question: where does time go during a representative workload?
 
-There are two profiler entrypoints. `scripts/profile.sh` loads `configs/profiler.yaml` and profiles a standalone smoke workload, writing traces under `outputs/profiles/` by default. `uv run python src/main.py run.mode=profile` composes a normal experiment config, builds the trainer stack, and profiles a short training-style workload under `outputs/runs/<run.id>/profiles/`.
+There are two profiler entrypoints. `scripts/profile.sh` loads `configs/profiler.yaml` and profiles a standalone smoke workload, writing traces under `outputs/profiles/` by default. `uv run python src/main.py run.mode=profile` composes a normal experiment config, builds the trainer stack, and profiles a short training-style workload under `outputs/runs/<run.id>/trial_<n>/profiles/`.
 
 ## When To Use It
 
@@ -49,9 +49,10 @@ Profile a named experiment with the same model/data/task config you train with:
 
 ```bash
 uv run python src/main.py +experiment=baseline run.mode=profile run.device=cuda run.precision=amp profiler.active_steps=5
+uv run python src/main.py --config-file outputs/run_configs/<run.id>/trial_<n>.yaml run.mode=profile checkpoint.resume=outputs/runs/<run.id>/trial_<n>/checkpoints/best.pt profiler.active_steps=5
 ```
 
-Open traces with TensorBoard. Use `outputs/profiles` for the standalone wrapper and `outputs/runs/<run.id>/profiles` for `run.mode=profile`:
+Open traces with TensorBoard. Use `outputs/profiles` for the standalone wrapper and `outputs/runs/<run.id>/trial_<n>/profiles` for `run.mode=profile`:
 
 ```bash
 uv run tensorboard --logdir outputs/profiles
@@ -86,7 +87,7 @@ aten::addmm                  ...             ...           ...             ...  
 
 This is useful for checking that profiler tooling works and for understanding operator-level output. To optimize a real project, edit `configs/profiler.yaml` or pass `PROFILE_CONFIG=<path>` so the profiler uses your model, dataset, task, batch size, precision, and several representative training steps.
 
-`run.mode=profile` profiles the trainer stack built from the composed Hydra config. It uses the configured model, task, optimizer, precision policy, dataloader split, and profiler settings from the top-level `profiler:` block in `configs/config.yaml` or CLI overrides. It is the better option when you want the profile to match a real experiment config without duplicating that config into `configs/profiler.yaml`.
+`run.mode=profile` profiles the trainer stack built from the composed Hydra config. It uses the configured model, task, optimizer, precision policy, dataloader split, and profiler settings from the top-level `profiler:` block in `configs/config.yaml` or CLI overrides. If `checkpoint.resume` is set, model weights and checkpoint counters/metadata are loaded before warmup and recording. Optimizer, scheduler, scaler, and RNG state are not restored in profile mode. Use an explicit checkpoint path when the profile run id differs from the source training run. This entrypoint is the better option when you want the profile to match a real experiment config without duplicating that config into `configs/profiler.yaml`.
 
 ## Read The Terminal Table
 
@@ -134,29 +135,25 @@ What to look for:
 ## Optimization Workflow
 
 1. Establish a baseline.
-
-Run the profiler before making performance changes and keep the terminal table or TensorBoard trace directory.
-
+    Run the profiler before making performance changes and keep the terminal table or TensorBoard trace directory.
 2. Form one hypothesis.
-
-Examples: data transfer is slow, many small ops are hurting throughput, matrix multiplies dominate, CPU transforms are starving the GPU.
-
+    Examples: data transfer is slow, many small ops are hurting throughput, matrix multiplies dominate, CPU transforms are starving the GPU.
 3. Make one change.
 
-Examples:
+    Examples:
 
-- Increase `data.num_workers` for real datasets.
-- Enable `data.pin_memory=true` when training on CUDA.
-- Increase batch size if memory allows.
-- Use `run.precision=amp` or `run.precision=bf16` on compatible CUDA hardware.
-- Move expensive preprocessing out of `__getitem__`.
-- Vectorize Python loops into tensor operations.
-- Reduce repeated `.to(...)`, `.cpu()`, `.item()`, or dtype conversions inside the step.
-- Combine many tiny tensor ops when possible.
+    - Increase `data.num_workers` for real datasets.
+    - Enable `data.pin_memory=true` when training on CUDA.
+    - Increase batch size if memory allows.
+    - Use `run.precision=amp` or `run.precision=bf16` on compatible CUDA hardware.
+    - Move expensive preprocessing out of `__getitem__`.
+    - Vectorize Python loops into tensor operations.
+    - Reduce repeated `.to(...)`, `.cpu()`, `.item()`, or dtype conversions inside the step.
+    - Combine many tiny tensor ops when possible.
 
 4. Profile again.
 
-Compare the same workload. If the bottleneck moved or total step time improved, keep the change. If not, revert or test the next hypothesis.
+    Compare the same workload. If the bottleneck moved or total step time improved, keep the change. If not, revert or test the next hypothesis.
 
 5. Validate correctness.
 

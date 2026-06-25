@@ -19,8 +19,7 @@ if str(ROOT) not in sys.path:
 
 from src.utils.run_inspect import (
     DEFAULT_REGISTRY_PATH,
-    latest_record_for_run,
-    latest_records,
+    config_path_for_record,
     read_registry_records,
     run_dir_for_record,
     run_status,
@@ -29,12 +28,22 @@ from src.utils.run_inspect import (
 UNSUCCESSFUL = {'failed', 'incomplete', 'missing'}
 
 
+def _latest_artifact_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for record in records:
+        key = (str(record.get('run_id', '')), str(run_dir_for_record(record)))
+        if key[0]:
+            latest[key] = record
+    return list(latest.values())
+
+
 def selected_records(args: argparse.Namespace) -> list[dict[str, Any]]:
-    """Select registry records from ids and status filters."""
+    """Select latest records per artifact directory from ids and status filters."""
     records = read_registry_records(args.registry)
-    selected = (
-        [latest_record_for_run(records, run_id) for run_id in args.run_ids] if args.run_ids else latest_records(records)
-    )
+    if args.run_ids:
+        requested = set(args.run_ids)
+        records = [record for record in records if str(record.get('run_id')) in requested]
+    selected = _latest_artifact_records(records)
     statuses = set(args.statuses or [])
     if getattr(args, 'unsuccessful', False):
         statuses.update(UNSUCCESSFUL)
@@ -46,23 +55,28 @@ def selected_records(args: argparse.Namespace) -> list[dict[str, Any]]:
 def command_list(args: argparse.Namespace) -> None:
     """List runs and cleanup status."""
     for record in selected_records(args):
-        print(f'{record.get("run_id", "")}\t{run_status(record)}\t{run_dir_for_record(record)}')
+        print(
+            f'{record.get("run_id", "")}\ttrial={record.get("trial_id", 1)}'
+            f'\t{run_status(record)}\t{run_dir_for_record(record)}'
+        )
 
 
 def archive_record(record: dict[str, Any], output_dir: Path) -> Path:
     """Archive one run directory and registry record into a tar.gz file."""
     run_id = str(record.get('run_id', 'run'))
+    trial_id = int(record.get('trial_id', 1))
+    artifact_name = f'{run_id}_trial_{trial_id}'
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = output_dir / f'{run_id}_{int(time.time())}.tar.gz'
+    archive_path = output_dir / f'{artifact_name}_{int(time.time())}.tar.gz'
     run_dir = run_dir_for_record(record)
     with tarfile.open(archive_path, 'w:gz') as archive:
         if run_dir.exists():
-            archive.add(run_dir, arcname=f'{run_id}/run_dir')
-        config_path = record.get('config_path')
-        if config_path and Path(str(config_path)).exists():
-            archive.add(str(config_path), arcname=f'{run_id}/config.yaml')
+            archive.add(run_dir, arcname=f'{artifact_name}/run_dir')
+        config_path = config_path_for_record(record)
+        if config_path is not None and config_path.exists():
+            archive.add(str(config_path), arcname=f'{artifact_name}/config.yaml')
         payload = json.dumps(record, indent=2, sort_keys=True, default=str).encode('utf-8')
-        info = tarfile.TarInfo(f'{run_id}/registry_record.json')
+        info = tarfile.TarInfo(f'{artifact_name}/registry_record.json')
         info.size = len(payload)
         archive.addfile(info, fileobj=io.BytesIO(payload))
     return archive_path
@@ -88,14 +102,14 @@ def command_cleanup(args: argparse.Namespace) -> None:
         if args.archive_first and run_dir.exists() and not dry_run:
             print(f'archived {run_id} -> {archive_record(record, args.archive_dir)}')
         action = 'would remove' if dry_run else 'removing'
-        print(f'{action} {run_id}\t{status}\t{run_dir}')
+        print(f'{action} {run_id}\ttrial={record.get("trial_id", 1)}\t{status}\t{run_dir}')
         if not dry_run and run_dir.exists():
             shutil.rmtree(run_dir)
-        config_path = record.get('config_path')
-        if args.delete_config and config_path and Path(str(config_path)).exists():
+        config_path = config_path_for_record(record)
+        if args.delete_config and config_path is not None and config_path.exists():
             print(f'{action} config\t{config_path}')
             if not dry_run:
-                Path(str(config_path)).unlink()
+                config_path.unlink()
     if dry_run:
         print('dry run only; pass --yes to delete')
 

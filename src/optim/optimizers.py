@@ -12,7 +12,7 @@ Typical usage:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from src.utils.types import ConfigType
 
 
-def parameter_groups(model: torch.nn.Module, cfg: ConfigType) -> list[dict[str, object]]:
+def parameter_groups(model: torch.nn.Module, cfg: ConfigType) -> list[dict[str, Any]]:
     """Build parameter groups with optional norm/bias weight-decay exclusion."""
     weight_decay = float(cfg_get(cfg, 'weight_decay', 0.0))
     no_decay = bool(cfg_get(cfg, 'no_decay_norm_bias', True))
@@ -42,7 +42,7 @@ def parameter_groups(model: torch.nn.Module, cfg: ConfigType) -> list[dict[str, 
             no_decay_params.append(param)
         else:
             decay_params.append(param)
-    groups: list[dict[str, object]] = []
+    groups: list[dict[str, Any]] = []
     if decay_params:
         groups.append({'params': decay_params, 'weight_decay': weight_decay})
     if no_decay_params:
@@ -51,7 +51,7 @@ def parameter_groups(model: torch.nn.Module, cfg: ConfigType) -> list[dict[str, 
 
 
 @register_optimizer('adamw')
-def build_adamw(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigType) -> Optimizer:
+def build_adamw(params: Iterable[torch.Tensor] | Iterable[dict[str, Any]], cfg: ConfigType) -> Optimizer:
     """Build an AdamW optimizer from configuration."""
     return torch.optim.AdamW(
         params,
@@ -64,7 +64,7 @@ def build_adamw(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigT
 
 
 @register_optimizer('adam')
-def build_adam(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigType) -> Optimizer:
+def build_adam(params: Iterable[torch.Tensor] | Iterable[dict[str, Any]], cfg: ConfigType) -> Optimizer:
     """Build an Adam optimizer from configuration."""
     return torch.optim.Adam(
         params,
@@ -74,7 +74,7 @@ def build_adam(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigTy
 
 
 @register_optimizer('sgd')
-def build_sgd(params: Iterable[torch.Tensor | dict[str, object]], cfg: ConfigType) -> Optimizer:
+def build_sgd(params: Iterable[torch.Tensor] | Iterable[dict[str, Any]], cfg: ConfigType) -> Optimizer:
     """Build an SGD optimizer from configuration."""
     return torch.optim.SGD(
         params,

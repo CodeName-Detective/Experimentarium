@@ -14,9 +14,7 @@ Start with the smallest full run:
 uv run python src/main.py +experiment=sanity_cpu trainer.max_epochs=1
 ```
 
-This composes a Hydra config, prepares a run directory, runs sanity checks,
-builds data/model/task/optimizer/scheduler/loggers/checkpoints, trains, tests,
-logs metrics, and writes predictions.
+This composes a Hydra config, prepares a run directory, builds data/model/task/optimizer/scheduler/loggers/checkpoints, trains, tests, logs metrics, and writes predictions. It does not run sanity checks.
 
 After CUDA sanity passes, try:
 
@@ -32,6 +30,8 @@ Keep these references open:
 - `Flowchart.md`: visual entrypoint-to-artifact flow.
 - `Description.md`: file-by-file repository map.
 - `tutorial.md`: customization examples.
+- `callback_tutorial.md`: callback lifecycle and registry wiring.
+- `profiler_tutorial.md`: profiler usage and interpretation.
 
 ## Phase 1: Big Picture
 
@@ -46,11 +46,11 @@ Read:
 Learn:
 
 - The framework is driven by Hydra configs under `configs/`.
-- `src/main.py` is the main train/eval entrypoint.
+- `src/main.py` is the main train/eval/test/predict/profile entrypoint.
 - `scripts/run_sanity.py` validates the environment and config without training.
 - Config groups select model, data, task, optimizer, scheduler, trainer,
   logging, checkpoint, and sanity behavior.
-- Run outputs live under `outputs/runs/<run.id>/`.
+- Train/profile outputs live under `outputs/runs/<run.id>/trial_<n>/`; checkpoint-backed eval/test/predict outputs use `outputs/evaluations/<run.id>/trial_<source_trial>/<mode>_<checkpoint>/`.
 
 Mental model:
 
@@ -58,10 +58,9 @@ Mental model:
 command
   -> Hydra config
   -> prepare_run
-  -> sanity checks when needed
   -> registries build components
-  -> train or eval
-  -> logs/checkpoints/predictions
+  -> train, eval, test, predict, or profile
+  -> mode-specific logs/checkpoints/predictions/profiles
 ```
 
 ## Phase 2: Config System
@@ -83,6 +82,7 @@ Read:
 13. `configs/checkpoint/default.yaml`
 14. `configs/logging/default.yaml`
 15. `configs/sanity/default.yaml`
+16. `configs/profiler.yaml`
 
 Learn:
 
@@ -96,6 +96,7 @@ Learn:
 - Checkpoint config owns save, retention, and resume selectors.
 - Logging config owns JSONL, TensorBoard, and W&B settings.
 - Sanity config owns validation policy.
+- The top-level `callbacks:` list owns optional trainer hooks, while the top-level `profiler:` block owns trainer-level profiling behavior. `configs/profiler.yaml` separately configures the standalone profiler wrapper.
 
 Important current convention:
 
@@ -118,9 +119,10 @@ uv run python src/main.py model=small_transformer data=toy_sequence task=classif
 Read:
 
 1. `src/main.py`
-2. `scripts/train.sh`
-3. `scripts/eval.sh`
-4. `Makefile`
+2. `src/cli.py`
+3. `scripts/train.sh`
+4. `scripts/eval.sh`
+5. `Makefile`
 
 Trace:
 
@@ -137,15 +139,16 @@ Follow `src/main.py` in this order:
 5. Output directories are created.
 6. Registries are bootstrapped.
 7. Loggers are built.
-8. Sanity checks run unless the command is eval or training resume.
-9. Dataloaders, model, task, optimizer, and scheduler are built.
-10. `CheckpointManager` is created.
-11. `Trainer` is created.
-12. Train mode calls `trainer.fit()`.
-13. Eval mode calls `trainer.resume()` and `Evaluator.evaluate(...)`.
-14. Test metrics are logged and predictions are exported for normal train/eval runs.
-15. Resume runs with zero new epochs skip post-train test logging and prediction export.
-16. Loggers finish and distributed runtime cleans up.
+8. Dataloaders, model, task, optimizer, and scheduler are built.
+9. `CheckpointManager` and config-driven callbacks are created.
+10. `Trainer` is created.
+11. Train mode calls `trainer.fit()`, then optionally logs held-out test metrics and exports predictions.
+12. Eval/test/predict modes call `trainer.resume()`; eval logs metrics and predictions, test logs metrics only, and predict exports predictions only.
+13. Profile mode calls `trainer.resume()` and then `_profile_training(...)`; checkpoint resume is model-only in profile mode.
+14. Resume runs with zero new epochs skip post-train test logging and prediction export.
+15. Loggers finish and distributed runtime cleans up.
+
+`src/main.py` never executes `run_sanity_checks`. Use `scripts/run_sanity.py`, `ml-sanity`, `make sanity`, or the sanity Python API explicitly.
 
 Key detail:
 
@@ -159,89 +162,71 @@ loss-specific, or metric-specific logic.
 Read:
 
 1. `src/utils/run.py`
-2. `src/utils/paths.py`
-3. `configs/config.yaml` run section
-4. `README.md` run identity section
+2. `src/utils/run_inspect.py`
+3. `src/utils/paths.py`
+4. `scripts/run_registry.py`
+5. `configs/config.yaml`
+6. `README.md`
 
 Learn:
 
-- `prepare_run(cfg)` computes `run.config_id`.
-- It derives `run.id` from run/model/data/task/trial/config hash unless
-  `run.id` is manually set.
-- Fresh duplicate runs reuse the existing run directory and emit a warning.
-- Intentional training resumes reuse the existing run directory without the
-  duplicate-run warning.
-- Eval from a training checkpoint keeps the training run id and writes to `outputs/evaluations/<run.id>/`.
-- Training configs are stored in `outputs/run_configs/<run.id>.yaml`; evaluation configs use `outputs/evaluations/<run.id>/config.yaml`.
-- Run metadata, a shell-safe repeat command, and its working directory are appended to `outputs/run_registry.jsonl`.
-- Checkpoint/log/prediction/profile paths are rewritten under `run.run_dir`.
+- `prepare_run(cfg)` computes the stable `run.config_id` and derived `run.id` for fresh runs.
+- Users may supply a stable `run.id`, but `run.trial_id`, `run.tracking_id`, and the W&B run name are generated by code.
+- Fresh duplicate configs allocate `outputs/runs/<run.id>/trial_<next>/`; they never append to an older fresh trial.
+- Trial numbers remain monotonic through the registry even if an unsuccessful trial directory is cleaned up.
+- Train/profile configs use `outputs/run_configs/<run.id>/trial_<n>.yaml`.
+- The startup log highlights run id, trial id, mode, and output directory in bold cyan.
 
 Try:
 
 ```bash
 uv run python src/main.py +experiment=sanity_cpu
-ls outputs/runs
-ls outputs/run_configs
-tail -n 3 outputs/run_registry.jsonl
+uv run python src/main.py +experiment=sanity_cpu
+uv run ml-run-registry list
 ```
 
+The two fresh invocations share a stable run id and use consecutive trial folders.
+
 ## Phase 5: Resume And Evaluation Behavior
-
-Read:
-
-1. `src/utils/run.py`
-2. `src/engine/trainer.py`
-3. `src/utils/checkpoint.py`
-4. `src/main.py`
-5. `configs/checkpoint/default.yaml`
 
 Training resume examples:
 
 ```bash
-uv run python src/main.py +experiment=baseline checkpoint.resume=latest
-uv run python src/main.py +experiment=baseline checkpoint.resume=best
-uv run python src/main.py +experiment=baseline checkpoint.resume=last
-uv run python src/main.py +experiment=baseline checkpoint.resume=5
-uv run python src/main.py +experiment=baseline checkpoint.resume=epoch_0005
+uv run python src/main.py --resume-run <run_id>
+uv run python src/main.py --resume-run <run_id> --registry /path/to/run_registry.jsonl
+uv run python src/main.py +experiment=baseline checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/last.pt
 ```
-
-Learn:
-
-- `latest` loads the newest valid checkpoint.
-- `last` loads `checkpoints/last.pt`.
-- `best` loads `checkpoints/best.pt`.
-- `5` and `epoch_0005` load `checkpoints/epoch_0005.pt`.
-- Training resume skips sanity checks.
-- Training resume logs a bold green resume message.
-- If resume does not run any new epochs, post-train test logging and prediction
-  export are skipped to avoid duplicate W&B/JSONL/TensorBoard points.
 
 Evaluation examples:
 
 ```bash
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=best
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=epoch_0005
-uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
+uv run ml-evaluate-run <run_id> --checkpoint best
+uv run ml-evaluate-run <run_id> --checkpoint epoch_0005
+uv run python src/main.py +experiment=baseline run.mode=eval checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
 ```
 
 Learn:
 
-- Eval mode skips sanity checks.
-- Eval selector paths are resolved against the training run.
-- Eval artifacts and the resolved eval config are written to `outputs/evaluations/<run_id>/`.
+- An explicit checkpoint path encodes the source `run.id` and `trial_id`; those values override config-derived identity.
+- `--resume-run` selects the newest training registry record and converts the requested selector to an explicit checkpoint path.
+- `--resume-run` cannot be combined with `--run-id`.
+- Intentional training resume continues the original training trial and restores full training state.
+- Train, resume, profile, eval, test, and predict do not run sanity checks automatically. Evaluation-style modes load model-only state plus checkpoint counters/metadata.
+- Evaluation output is `outputs/evaluations/<run.id>/trial_<source_trial>/<mode>_<checkpoint>/`.
+- Repeating the same evaluation deletes and recreates that exact folder, emitting a bold red overwrite warning; another checkpoint gets another folder.
+- A resume that runs zero new epochs skips post-train test/prediction logging.
 
 ## Behavior Exceptions To Remember
 
-These are intentional deviations from the simple train/eval mental model:
-
 | Situation | Behavior | Why |
 | --- | --- | --- |
-| Fresh duplicate run id | Reuses the existing run directory and emits a warning. | Keeps run ids stable instead of creating `_2`, `_3`, etc. |
-| Training resume with `checkpoint.resume=...` | Reuses the training run directory without the duplicate-run warning. | Resume is intentional and should continue the same run. |
-| Training resume | Skips sanity checks. | Resume should start quickly from a known run/config. |
-| Eval mode | Skips sanity checks. | Eval should only load and score a checkpoint. |
-| Eval from training checkpoint | Keeps `run.id` and writes to `outputs/evaluations/<run_id>/`. | Keeps evaluation artifacts separate from training artifacts. |
-| Resume with zero new epochs | Skips post-train test metrics and prediction export. | Avoids duplicate JSONL/TensorBoard/W&B points. |
+| Fresh duplicate config | Allocates the next code-managed trial. | Keeps logs and checkpoints isolated. |
+| Explicit checkpoint resume | Recovers run/trial identity from the path. | The model artifact is the identity source. |
+| `--resume-run` | Resolves the registry record to an explicit checkpoint path. | Avoids hash-based or manually supplied trial selection. |
+| Repeated same evaluation | Replaces the same `<mode>_<checkpoint>` folder with a red warning. | Keeps one clean local result per evaluation target. |
+| Different evaluated checkpoints | Use separate `eval_best`, `eval_last`, or `eval_epoch_...` folders. | Prevents model-result collisions. |
+| Normal experiment entrypoints | Never run sanity checks automatically. | Sanity validation is an explicit operation. |
+| Resume with zero new epochs | Skips duplicate post-train test/prediction output. | Avoids duplicate tracking points. |
 
 ## Phase 6: Registries
 
@@ -429,14 +414,14 @@ Learn:
 
 - Device placement.
 - AMP and precision handling.
-- `fp32` stays on the normal train/eval/predict path; `amp`, `fp16`, and `bf16` share CUDA autocast across trainer and evaluator paths.
+- `fp32` stays on the normal train/validation/test/predict path; `amp`, `fp16`, and `bf16` share CUDA autocast across trainer and evaluator paths.
 - Gradient accumulation.
 - Gradient clipping.
 - Finite-loss checks.
 - Training loop.
 - Validation loop.
 - Recursive device transfer for nested batches and evaluation without a task loss.
-- Callback hook timing, direct `Trainer` wiring, and current config-integration limitations.
+- Callback hook timing, top-level `callbacks:` config construction, registry wiring, and direct `Trainer` wiring for tests/custom scripts.
 - Scheduler stepping.
 - Metric logging.
 - Checkpoint saving.
@@ -473,6 +458,7 @@ Learn:
 - Saves are atomic.
 - Manifest stores checksum metadata.
 - Checksum validation uses the latest manifest entry for a checkpoint path.
+- Manifest entries are replaced on same-path overwrite and removed on retention rotation. Exception saves do not invalidate `last.pt`; disabled selectors are absent from both disk and manifest.
 - `last.pt` is the latest checkpoint pointer.
 - `best.pt` is the best monitored checkpoint pointer.
 - `latest`, `last`, `best`, and epoch selectors are supported.
@@ -499,7 +485,7 @@ Learn:
 - JSONL logging is enabled by default.
 - TensorBoard logging is optional.
 - W&B logging is optional.
-- W&B uses `run.tracking_id`: `run.id` for training and `<run.id>_evaluation` for evaluation.
+- W&B ids and names are generated as `<run.id>-trial-<n>` for train/profile and `<run.id>-trial-<source_trial>-<mode>-<checkpoint>` for eval/test/predict.
 - W&B uses `resume='allow'`.
 - W&B receives the resolved config.
 - W&B logs the resolved config YAML as an artifact.
@@ -510,7 +496,7 @@ Try:
 
 ```bash
 uv run python src/main.py +experiment=sanity_cpu
-cat outputs/runs/<run_id>/logs/metrics.jsonl
+cat outputs/runs/<run_id>/trial_<n>/logs/metrics.jsonl
 ```
 
 Optional tracking:
@@ -536,9 +522,9 @@ Learn:
 - Python, NumPy, and PyTorch seeds are set together.
 - CUDA seed setup happens when CUDA is required.
 - Deterministic settings are configurable.
-- Distributed helpers handle rank, world size, barriers, broadcast, and metric
-  averaging.
-- True DDP model wrapping is documented as a future extension.
+- Distributed helpers handle rank, world size, barriers, broadcast, weighted metric
+  reductions, tensor sums, and object gathering.
+- `src/main.py` automatically wraps the model with `torch.nn.parallel.DistributedDataParallel` when launched under an initialized `torchrun` process group.
 
 Try:
 
@@ -572,7 +558,7 @@ Learn:
 - Registry checks confirm selected component names exist.
 - Smoke checks run a tiny data/model/loss/backward/optimizer/scheduler path.
 - Experiment composition checks catch broken experiment YAML.
-- Main eval and training resume skip sanity checks by design.
+- Normal train/resume/profile/eval/test/predict workflows do not execute the sanity suite; invoke the standalone sanity command explicitly.
 
 Try:
 
@@ -590,13 +576,19 @@ Read:
 1. `tests/conftest.py`
 2. `tests/test_config.py`
 3. `tests/test_dataset.py`
-4. `tests/test_model.py`
-5. `tests/test_training.py`
-6. `tests/test_checkpoint.py`
-7. `tests/test_metrics.py`
-8. `tests/test_schedulers.py`
-9. `tests/test_run_identity.py`
-10. `tests/test_sanity.py`
+4. `tests/test_data.py`
+5. `tests/test_model.py`
+6. `tests/test_precision.py`
+7. `tests/test_tasks.py`
+8. `tests/test_callbacks.py`
+9. `tests/test_training.py`
+10. `tests/test_checkpoint.py`
+11. `tests/test_metrics.py`
+12. `tests/test_schedulers.py`
+13. `tests/test_distributed.py`
+14. `tests/test_run_identity.py`
+15. `tests/test_run_tools.py`
+16. `tests/test_sanity.py`
 
 Run:
 
@@ -610,10 +602,12 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 uv run pytest tests/test_training.py -q
 Learn:
 
 - Tests show the expected component contracts.
-- Run identity tests document reuse, eval suffixing, and resume selectors.
-- Checkpoint tests document selector paths, fallback loading, and manifest
-  checksum behavior.
-- Training tests document fit/resume behavior.
+- Run identity tests document reuse, evaluation layout, tracking ids, and resume selectors.
+- Run-tool tests document replay/resume lookup, comparison, plotting, evaluation command construction, export, and unsuccessful-run selection.
+- Checkpoint tests document selector paths, fallback loading, and manifest checksum behavior.
+- Trainer regressions cover step-validation state restoration, monotonic logging steps, partial accumulation normalization, scheduler state at checkpoint time, and model-only evaluation loading.
+- Distributed and task regressions cover duplicate-free evaluation shards, dataset confusion-matrix segmentation metrics, and dataset-level detection AP@50.
+- Precision, distributed, callback, task, and training tests document their respective runtime contracts.
 
 ## Phase 17: Customization Path
 

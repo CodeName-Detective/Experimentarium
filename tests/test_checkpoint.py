@@ -75,3 +75,44 @@ def test_checkpoint_verify_reports_selector_checksum_mismatch(tmp_path):
     Path(tmp_path, 'last.pt').write_text('corrupt', encoding='utf-8')
 
     assert any('last.pt' in issue for issue in manager.verify())
+
+
+def test_checkpoint_rotation_keeps_manifest_verifiable(tmp_path):
+    model = MLP({'input_dim': 4, 'hidden_dim': 8, 'output_dim': 2})
+    manager = CheckpointManager(tmp_path, keep_last_k=1, save_top_k=0)
+    manager.save(_state(model, epoch=1), epoch=1, metric=1.0)
+    manager.save(_state(model, epoch=2), epoch=2, metric=0.5)
+
+    assert not Path(tmp_path, 'epoch_0001.pt').exists()
+    assert manager.verify() == []
+
+
+def test_exception_checkpoint_does_not_invalidate_last_selector(tmp_path):
+    model = MLP({'input_dim': 4, 'hidden_dim': 8, 'output_dim': 2})
+    manager = CheckpointManager(tmp_path)
+    manager.save(_state(model, epoch=1), epoch=1, metric=1.0)
+    manager.save_exception(_state(model, epoch=1), epoch=1)
+
+    assert manager.verify() == []
+    assert manager._read_manifest()['latest'] == 'epoch_0001.pt'
+
+
+def test_disabled_checkpoint_selectors_are_not_created_or_verified(tmp_path):
+    model = MLP({'input_dim': 4, 'hidden_dim': 8, 'output_dim': 2})
+    manager = CheckpointManager(tmp_path, save_last=False, save_top_k=0)
+    manager.save(_state(model), epoch=1, metric=0.5, is_best=True)
+
+    assert not Path(tmp_path, 'last.pt').exists()
+    assert not Path(tmp_path, 'best.pt').exists()
+    assert manager.verify() == []
+
+
+def test_overwriting_epoch_replaces_manifest_checksum(tmp_path):
+    model = MLP({'input_dim': 4, 'hidden_dim': 8, 'output_dim': 2})
+    manager = CheckpointManager(tmp_path, keep_last_k=10)
+    manager.save(_state(model, epoch=5), epoch=5, metric=0.5)
+    manager.save(_state(model, epoch=5), epoch=5, metric=0.4)
+
+    assert manager.verify() == []
+    entries = manager._read_manifest()['checkpoints']
+    assert [entry['path'] for entry in entries].count('epoch_0005.pt') == 1

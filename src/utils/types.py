@@ -12,7 +12,7 @@ Typical usage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -103,9 +103,9 @@ class SchedulerProtocol(Protocol):
 AnyScheduler = LRScheduler | SchedulerProtocol
 AnyModel = nn.Module | nn.DataParallel | nn.parallel.DistributedDataParallel
 
-try:
+if TYPE_CHECKING:
     from omegaconf import DictConfig
 
-    ConfigType = DictConfig | ConfigDict
-except ImportError:
-    ConfigType = ConfigDict  # type: ignore[misc]
+    ConfigType: TypeAlias = DictConfig | ConfigDict
+else:
+    ConfigType: TypeAlias = ConfigDict

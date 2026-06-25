@@ -2,7 +2,7 @@
 
 Evaluator runs a task over any dataloader for validation, test, or standalone
 checkpoint evaluation. It keeps evaluation free of optimizer/training concerns
-and averages numeric metrics across DDP ranks when distributed training is active.
+and reduces weighted metric totals across DDP ranks when distributed execution is active.
 
 Typical usage:
     evaluator = Evaluator(model, task, device='cpu')
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 import torch
 
 from src.engine.precision import precision_autocast
-from src.runtime.distributed import mean_dict
+from src.runtime.distributed import reduce_sum_count, unwrap_model
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -62,46 +62,59 @@ class Evaluator:
 
     @torch.no_grad()
     def evaluate(self, loader: Iterable[Batch], prefix: str = 'val', limit_batches: Any = None) -> dict[str, float]:
-        """Evaluate a loader and return prefixed aggregate metrics."""
-        self.model.eval()
-        self.task.reset_metrics()
-        total_loss = 0.0
-        loss_count = 0
-        max_batches = _batch_limit(loader, limit_batches)
-        for batch_idx, batch in enumerate(loader, start=1):
-            if max_batches is not None and batch_idx > max_batches:
-                break
-            batch = move_to_device(batch, self.device)
-            with precision_autocast(self.device, self.precision):
-                result = self.task.step(self.model, batch, stage=prefix)
-            batch_size = int(result.targets.shape[0]) if result.targets is not None else 1
-            if result.loss is not None:
-                total_loss += float(result.loss.detach().cpu()) * batch_size
-                loss_count += batch_size
-        metrics = self.task.compute_metrics()
-        if loss_count:
-            metrics['loss'] = total_loss / loss_count
-        metrics = mean_dict(metrics, device=self.device)
-        return {f'{prefix}/{key}': value for key, value in metrics.items()}
+        """Evaluate a loader and return prefixed aggregate metrics without mutating training state."""
+        was_training = self.model.training
+        metric_state = self.task.metric_state_dict()
+        evaluation_model = unwrap_model(self.model)
+        try:
+            self.model.eval()
+            self.task.reset_metrics()
+            total_loss = 0.0
+            loss_count = 0.0
+            max_batches = _batch_limit(loader, limit_batches)
+            for batch_idx, batch in enumerate(loader, start=1):
+                if max_batches is not None and batch_idx > max_batches:
+                    break
+                batch = move_to_device(batch, self.device)
+                with precision_autocast(self.device, self.precision):
+                    result = self.task.step(evaluation_model, batch, stage=prefix)
+                batch_size = int(result.targets.shape[0]) if result.targets is not None else 1
+                loss_weight = float(result.loss_weight if result.loss_weight is not None else batch_size)
+                if result.loss is not None:
+                    total_loss += float(result.loss.detach().cpu()) * loss_weight
+                    loss_count += loss_weight
+            metrics = self.task.compute_metrics_distributed(device=self.device)
+            global_loss, global_loss_count = reduce_sum_count(total_loss, loss_count, device=self.device)
+            if global_loss_count:
+                metrics['loss'] = global_loss / global_loss_count
+            return {f'{prefix}/{key}': value for key, value in metrics.items()}
+        finally:
+            self.task.load_metric_state_dict(metric_state)
+            self.model.train(was_training)
 
     @torch.no_grad()
     def predict(
         self, loader: Iterable[Batch], limit: int | None = None, limit_batches: Any = None
     ) -> list[dict[str, Any]]:
-        """Generate serializable prediction records from a loader."""
-        self.model.eval()
-        records: list[dict[str, Any]] = []
-        max_batches = _batch_limit(loader, limit_batches)
-        for batch_idx, batch in enumerate(loader, start=1):
-            if max_batches is not None and batch_idx > max_batches:
-                break
-            batch = move_to_device(batch, self.device)
-            with precision_autocast(self.device, self.precision):
-                outputs = self.model(batch)
-            records.extend(self.task.predict_records(outputs, batch))
-            if limit is not None and len(records) >= limit:
-                return records[:limit]
-        return records
+        """Generate serializable prediction records without changing model mode."""
+        was_training = self.model.training
+        prediction_model = unwrap_model(self.model)
+        try:
+            self.model.eval()
+            records: list[dict[str, Any]] = []
+            max_batches = _batch_limit(loader, limit_batches)
+            for batch_idx, batch in enumerate(loader, start=1):
+                if max_batches is not None and batch_idx > max_batches:
+                    break
+                batch = move_to_device(batch, self.device)
+                with precision_autocast(self.device, self.precision):
+                    outputs = prediction_model(batch)
+                records.extend(self.task.predict_records(outputs, batch))
+                if limit is not None and len(records) >= limit:
+                    return records[:limit]
+            return records
+        finally:
+            self.model.train(was_training)
 
 
 def _batch_limit(loader: Any, configured: Any) -> int | None:

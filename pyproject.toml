@@ -39,6 +39,7 @@ ml-verify-checkpoints = "scripts.verify_checkpoints:main"
 
 [project.optional-dependencies]
 tracking = [
+  "setuptools<81",
   "tensorboard>=2.15",
   "wandb>=0.16",
 ]

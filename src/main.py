@@ -7,8 +7,8 @@ then delegates training or evaluation to ``Trainer`` and ``Evaluator``.
 Typical usage:
     uv run python src/main.py
     uv run python src/main.py +experiment=sanity_cpu
-    uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run_id>/checkpoints/best.pt
-    uv run python src/main.py --config-file outputs/run_configs/<run_id>.yaml --run-id replayed_run
+    uv run python src/main.py run.mode=eval checkpoint.resume=outputs/runs/<run_id>/trial_<n>/checkpoints/best.pt
+    uv run python src/main.py --config-file outputs/run_configs/<run_id>/trial_<n>.yaml --run-id replayed_run
 """
 # ruff: noqa: E402
 
@@ -18,7 +18,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -34,7 +34,13 @@ from src.engine import Evaluator, Trainer
 from src.engine.evaluator import move_to_device
 from src.engine.precision import precision_autocast
 from src.optim import build_optimizer, build_scheduler
-from src.runtime.distributed import cleanup as cleanup_distributed, setup_from_env, wrap_model_for_distributed
+from src.runtime.distributed import (
+    all_gather_objects,
+    cleanup as cleanup_distributed,
+    is_rank0,
+    setup_from_env,
+    wrap_model_for_distributed,
+)
 from src.tasks import build_task
 from src.utils.checkpoint import CheckpointManager
 from src.utils.config import cfg_get, config_to_dict, load_config
@@ -42,16 +48,21 @@ from src.utils.logger import build_loggers
 from src.utils.paths import make_output_dirs
 from src.utils.registry import MODEL_REGISTRY
 from src.utils.run import prepare_run
-from src.utils.run_inspect import config_path_for_run
-from src.utils.sanity import bootstrap_registries, run_sanity_checks
+from src.utils.run_inspect import DEFAULT_REGISTRY_PATH, checkpoint_path_for_run, config_path_for_run
+from src.utils.sanity import bootstrap_registries
 from src.utils.seed import setup_reproducibility
 
 _REPLAY_CONFIG_FLAGS = {'--config-file', '--run-config', '--replay-config'}
 _REPLAY_FROM_RUN_FLAGS = {'--from-run'}
 _RESUME_RUN_FLAGS = {'--resume-run'}
 _REPLAY_RUN_ID_FLAGS = {'--run-id', '--replay-run-id'}
+_REPLAY_REGISTRY_FLAGS = {'--registry', '--run-registry'}
 _GENERATED_REPLAY_PATHS = (
     'run.id',
+    'run.trial',
+    'run.trial_id',
+    'run.source_trial_id',
+    'run.checkpoint_label',
     'run.config_id',
     'run.run_dir',
     'run.runs_dir',
@@ -81,18 +92,22 @@ def run(cfg: Any) -> None:
     make_output_dirs(cfg)
     bootstrap_registries()
     loggers = build_loggers(cfg)
-    logger = logging.getLogger('ml_template')
-    if run_info.warning:
-        logger.warning('\033[1;33m%s\033[0m', run_info.warning)
-    logger.info('run_id=%s config_id=%s run_dir=%s', run_info.run_id, run_info.config_id, run_info.run_dir)
+    logger = logging.getLogger(__name__)
     mode = str(cfg_get(cfg, 'run.mode', 'train')).lower()
+    logger.info(
+        '\033[1;36mRUN ID: %s | TRIAL ID: %s | MODE: %s | OUTPUT: %s\033[0m',
+        run_info.run_id,
+        run_info.trial_id,
+        mode,
+        run_info.run_dir,
+    )
+    if run_info.warning:
+        logger.warning('\033[1;31m%s\033[0m', run_info.warning)
     valid_modes = {'train', 'eval', 'test', 'predict', 'profile'}
     is_checkpoint_resume = bool(cfg_get(cfg, 'checkpoint.resume', None))
     try:
         if mode not in valid_modes:
             raise ValueError(f'Unknown run.mode={mode}. Expected one of {sorted(valid_modes)}')
-        if _should_run_sanity(mode, is_checkpoint_resume):
-            run_sanity_checks(cfg, strict=bool(cfg_get(cfg, 'sanity.strict', False)))
         loaders = build_dataloaders(cfg)
         device = _resolve_device(cfg)
         model = MODEL_REGISTRY.build(str(cfg_get(cfg, 'model.name', 'mlp')), cfg_get(cfg, 'model')).to(device)
@@ -124,6 +139,7 @@ def run(cfg: Any) -> None:
                 loggers.log_metrics(trainer.test(), step=trainer.global_step)
                 _export_predictions(cfg, trainer, loaders, task)
         elif mode == 'profile':
+            trainer.resume()
             _profile_training(cfg, trainer)
         else:
             if not is_checkpoint_resume:
@@ -134,18 +150,16 @@ def run(cfg: Any) -> None:
             if mode in {'eval', 'predict'}:
                 _export_predictions(cfg, trainer, loaders, task)
     finally:
-        loggers.finish()
-        cleanup_distributed()
-
-
-def _should_run_sanity(mode: str, is_checkpoint_resume: bool) -> bool:
-    return mode in {'train', 'profile'} and not (mode == 'train' and is_checkpoint_resume)
+        try:
+            loggers.finish()
+        finally:
+            cleanup_distributed()
 
 
 def _resolve_device(cfg: Any) -> torch.device:
     device = torch.device(cfg_get(cfg, 'run.device', cfg_get(cfg, 'device', 'cpu')))
     if device.type == 'cuda' and not torch.cuda.is_available():
-        logging.getLogger('ml_template').warning('CUDA requested but unavailable; falling back to CPU')
+        logging.getLogger(__name__).warning('CUDA requested but unavailable; falling back to CPU')
         device = torch.device('cpu')
     return device
 
@@ -154,13 +168,18 @@ def _export_predictions(cfg: Any, trainer: Trainer, loaders: dict[str, Any], tas
     if 'test' not in loaders:
         return None
     prediction_limit = int(cfg_get(cfg, 'run.prediction_limit', 100))
+    local_limit = prediction_limit
+    local_records = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision).predict(
+        loaders['test'], limit=local_limit, limit_batches=trainer.limit_test_batches
+    )
+    gathered = all_gather_objects(local_records)
+    if not is_rank0():
+        return None
+    records = [record for rank_records in gathered for record in rank_records][:prediction_limit]
     pred_path = Path(str(cfg_get(cfg, 'run.prediction_dir', 'outputs/predictions'))) / 'test_predictions.json'
     pred_path.parent.mkdir(parents=True, exist_ok=True)
-    records = Evaluator(trainer.model, task, trainer.device, precision=trainer.precision).predict(
-        loaders['test'], limit=prediction_limit, limit_batches=trainer.limit_test_batches
-    )
     pred_path.write_text(json.dumps(records, indent=2), encoding='utf-8')
-    logging.getLogger('ml_template').info('Wrote %s prediction records to %s', len(records), pred_path)
+    logging.getLogger(__name__).info('Wrote %s prediction records to %s', len(records), pred_path)
     return pred_path
 
 
@@ -206,7 +225,7 @@ def _profile_training(cfg: Any, trainer: Trainer) -> None:
     if profile_cuda:
         activities.append(ProfilerActivity.CUDA)
 
-    logger = logging.getLogger('ml_template')
+    logger = logging.getLogger(__name__)
     logger.info(
         'Profiling split=%s warmup_steps=%s active_steps=%s precision=%s trace_dir=%s',
         split,
@@ -263,13 +282,13 @@ def load_replay_config(config_file: str | Path, overrides: list[str] | None = No
     Returns:
         A DictConfig ready to pass to the shared run workflow.
     """
-    cfg = config_to_dict(load_config(config_file))
-    _clear_generated_replay_fields(cfg)
-    cfg = OmegaConf.create(cfg)
+    raw_cfg = config_to_dict(load_config(config_file))
+    _clear_generated_replay_fields(raw_cfg)
+    cfg = cast('DictConfig', OmegaConf.create(raw_cfg))
     normalized_overrides = [_normalize_replay_override(override) for override in (overrides or [])]
     _validate_replay_overrides(normalized_overrides)
     if normalized_overrides:
-        cfg = OmegaConf.merge(cfg, OmegaConf.from_dotlist(normalized_overrides))
+        cfg = cast('DictConfig', OmegaConf.merge(cfg, OmegaConf.from_dotlist(normalized_overrides)))
     _sync_legacy_aliases(cfg)
     return cfg
 
@@ -284,6 +303,7 @@ def _extract_config_file_args(argv: list[str]) -> tuple[str | None, list[str]]:
     source_run_id: str | None = None
     resume_run_id: str | None = None
     replay_run_id: str | None = None
+    registry_path: str | None = None
     remaining: list[str] = []
     idx = 0
     while idx < len(argv):
@@ -292,6 +312,7 @@ def _extract_config_file_args(argv: list[str]) -> tuple[str | None, list[str]]:
         matched_from_run_flag = _match_flag(arg, _REPLAY_FROM_RUN_FLAGS)
         matched_resume_run_flag = _match_flag(arg, _RESUME_RUN_FLAGS)
         matched_run_id_flag = _match_flag(arg, _REPLAY_RUN_ID_FLAGS)
+        matched_registry_flag = _match_flag(arg, _REPLAY_REGISTRY_FLAGS)
         if matched_config_flag is not None:
             if config_file is not None or source_run_id is not None or resume_run_id is not None:
                 raise ValueError('Only one replay config source can be supplied')
@@ -301,29 +322,69 @@ def _extract_config_file_args(argv: list[str]) -> tuple[str | None, list[str]]:
             if config_file is not None or source_run_id is not None or resume_run_id is not None:
                 raise ValueError('Only one replay config source can be supplied')
             source_run_id, idx = _consume_flag_value(argv, idx, matched_from_run_flag, value_name='run id')
-            config_file = str(config_path_for_run(source_run_id))
             continue
         if matched_resume_run_flag is not None:
             if config_file is not None or source_run_id is not None or resume_run_id is not None:
                 raise ValueError('Only one replay config source can be supplied')
             resume_run_id, idx = _consume_flag_value(argv, idx, matched_resume_run_flag, value_name='run id')
-            config_file = str(config_path_for_run(resume_run_id))
             continue
         if matched_run_id_flag is not None:
             if replay_run_id is not None:
                 raise ValueError('Only one replay run id can be supplied')
             replay_run_id, idx = _consume_flag_value(argv, idx, matched_run_id_flag, value_name='run id')
             continue
+        if matched_registry_flag is not None:
+            if registry_path is not None:
+                raise ValueError('Only one replay registry can be supplied')
+            registry_path, idx = _consume_flag_value(argv, idx, matched_registry_flag, value_name='path')
+            continue
         remaining.append(arg)
         idx += 1
+
+    return _finalize_replay_args(
+        config_file=config_file,
+        source_run_id=source_run_id,
+        resume_run_id=resume_run_id,
+        replay_run_id=replay_run_id,
+        registry_path=registry_path,
+        overrides=remaining,
+    )
+
+
+def _finalize_replay_args(
+    *,
+    config_file: str | None,
+    source_run_id: str | None,
+    resume_run_id: str | None,
+    replay_run_id: str | None,
+    registry_path: str | None,
+    overrides: list[str],
+) -> tuple[str | None, list[str]]:
+    selected_registry = registry_path or str(DEFAULT_REGISTRY_PATH)
+    if resume_run_id is not None and replay_run_id is not None:
+        raise ValueError('--run-id cannot be used with --resume-run; the checkpoint path owns run identity')
+    if source_run_id is not None:
+        config_file = str(config_path_for_run(source_run_id, selected_registry))
+    elif resume_run_id is not None:
+        config_file = str(config_path_for_run(resume_run_id, selected_registry, mode='train'))
+
     if resume_run_id is not None:
-        if replay_run_id is None:
-            replay_run_id = resume_run_id
-        if not any(override.startswith('checkpoint.resume=') for override in remaining):
-            remaining.append('checkpoint.resume=latest')
-    if replay_run_id is not None:
-        remaining.append(f'run.id={replay_run_id}')
-    return config_file, remaining
+        checkpoint_override = next(
+            (override for override in reversed(overrides) if override.startswith('checkpoint.resume=')),
+            None,
+        )
+        selector = checkpoint_override.split('=', maxsplit=1)[1] if checkpoint_override else 'latest'
+        if checkpoint_override is not None:
+            overrides.remove(checkpoint_override)
+        checkpoint_path = checkpoint_path_for_run(resume_run_id, selector, selected_registry)
+        overrides.append(f'checkpoint.resume={checkpoint_path}')
+        if not any(override.startswith('run.mode=') for override in overrides):
+            overrides.append('run.mode=train')
+    elif replay_run_id is not None:
+        overrides.append(f'run.id={replay_run_id}')
+    if registry_path is not None and not any(override.startswith('run.config_registry=') for override in overrides):
+        overrides.append(f'run.config_registry={registry_path}')
+    return config_file, overrides
 
 
 def _match_flag(argument: str, flags: set[str]) -> str | None:
@@ -361,14 +422,8 @@ def _validate_replay_overrides(overrides: list[str]) -> None:
 
 
 def _clear_generated_replay_fields(cfg: dict[str, Any]) -> None:
-    run_id = cfg_get(cfg, 'run.id', None)
-    tracking_id = cfg_get(cfg, 'run.tracking_id', None)
-    wandb_run_name = cfg_get(cfg, 'logging.wandb.run_name', None)
-    generated_wandb_names = {
-        str(value) for value in (run_id, tracking_id, f'{run_id}_evaluation' if run_id else None) if value
-    }
-    if wandb_run_name is not None and str(wandb_run_name) in generated_wandb_names:
-        _drop_replay_path(cfg, 'logging.wandb.run_name')
+    """Remove all code-owned identity and artifact fields from a saved config."""
+    _drop_replay_path(cfg, 'logging.wandb.run_name')
     for path in _GENERATED_REPLAY_PATHS:
         _drop_replay_path(cfg, path)
 

@@ -6,6 +6,7 @@ stays consistent across checkpointing and logging.
 """
 
 from src.runtime.distributed import (
+    all_gather_objects,
     barrier,
     cleanup,
     is_initialized,
@@ -14,13 +15,17 @@ from src.runtime.distributed import (
     mean_dict,
     mean_scalar,
     rank,
+    reduce_sum_count,
     setup_from_env,
+    sum_scalar,
+    sum_tensor,
     unwrap_model,
     world_size,
     wrap_model_for_distributed,
 )
 
 __all__ = [
+    'all_gather_objects',
     'barrier',
     'cleanup',
     'is_initialized',
@@ -29,7 +34,10 @@ __all__ = [
     'mean_dict',
     'mean_scalar',
     'rank',
+    'reduce_sum_count',
     'setup_from_env',
+    'sum_scalar',
+    'sum_tensor',
     'unwrap_model',
     'world_size',
     'wrap_model_for_distributed',

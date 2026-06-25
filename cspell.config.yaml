@@ -53,11 +53,17 @@ words:
   - autograd
   - bfloat
   - Cabe
+  - pointwise
+  - Pointwise
   - cfgs
   - chdir
   - chdirs
   - checkpointing
   - ckpts
+  - matmul
+  - tensorized
+  - torchscript
+  - dotlist
   - compileall
   - conftest
   - conv
@@ -101,6 +107,7 @@ words:
   - noheader
   - noqa
   - numpy
+  - setuptools
   - omegaconf
   - onecycle
   - optim

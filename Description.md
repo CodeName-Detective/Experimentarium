@@ -13,8 +13,9 @@ For command-oriented usage, start with `README.md`.
 - `profiler_tutorial.md`: Profiler guide covering when to profile, CPU/CUDA usage, TensorBoard traces, result interpretation, and optimization workflow.
 - `Description.md`: This file. Use it when you need to understand the repository layout or decide where a new feature belongs.
 - `tutorial.md`: Hands-on cookbook for learning the framework and customizing datasets, models, tasks, losses, metrics, optimizers, schedulers, logging, checkpoints, sanity checks, and scripts.
-- `Flowchart.md`: Mermaid diagrams covering every entrypoint, train/eval/sanity flow, artifact layout, registries, and customization edit points.
-- `pyproject.toml`: Python project metadata, build metadata, dependency/version requirements used by sanity checks, optional extras, console scripts, and pytest settings. Edit this when renaming the project, adding dependencies, or changing package entrypoints.
+- `Learning_Plan.md`: Guided reading order for understanding config composition, runtime flow, extension points, tests, and run-management tools.
+- `Flowchart.md`: Mermaid diagrams covering entrypoints, train/eval/test/predict/profile and sanity flow, artifact layout, registries, and customization edit points.
+- `pyproject.toml`: Python project metadata, build metadata, dependency/version requirements used by sanity checks, the `dev` dependency group, the optional `tracking` extra, and console scripts. Edit this when renaming the project, adding dependencies, or changing package entrypoints.
 - `uv.lock`: Locked dependency graph for reproducible installs with `uv`. Update it after dependency changes if you keep the `uv` workflow. Don't change manually.
 - `ruff.toml`: Dedicated Ruff lint/format configuration. Edit this for line length, target Python version, selected rule families, and ignored rules.
 - `Makefile`: Shortcuts for common local commands: `install`, `sanity`, `train`, `eval`, `test`, `test-cov`, `lint`, `fmt`, and `clean`.
@@ -72,7 +73,7 @@ Optimizer configs.
 
 ### `configs/scheduler/`
 
-Learning-rate scheduler configs. `interval` controls whether the scheduler steps by epoch or batch, and `monitor` is used by metric-driven schedulers such as plateau.
+Learning-rate scheduler configs. `interval` controls whether the scheduler steps by epoch or batch, and `monitor` is used by metric-driven schedulers such as plateau. For horizon-based cosine and polynomial schedules, warmup steps are subtracted from the main schedule horizon; schedulers with explicit durations keep their configured parameters. Warmup with plateau is rejected because PyTorch cannot compose those schedulers.
 
 - `configs/scheduler/none.yaml`: Leaves LR unchanged; use for debugging and tiny sanity runs.
 - `configs/scheduler/constant.yaml`: Keeps LR at a fixed factor for `total_iters`.
@@ -141,7 +142,7 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 
 ## Scripts
 
-`scripts/` contains command-line helpers. They set `PYTHONPATH` to the repository root and call the canonical Python entrypoints.
+`scripts/` contains command-line helpers. Shell wrappers set `PYTHONPATH`; Python utilities add the repository root to `sys.path` before importing project modules.
 
 - `scripts/run_sanity.py`: Canonical machine validation script. Use after cloning, moving machines, changing dependencies, or before expensive training.
 - `scripts/train.sh`: Wrapper around `uv run python src/main.py`. Pass Hydra overrides after the script name.
@@ -156,7 +157,7 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 - `scripts/cleanup_runs.py`: Lists, archives, and deletes selected run directories, including failed, incomplete, and missing runs via `--unsuccessful`.
 - `scripts/verify_checkpoints.py`: Verifies checkpoint manifest entries and `best.pt`/`last.pt` selector checksums.
 - `scripts/sweep.sh`: Creates and runs a W&B sweep from `configs/sweep.yaml`.
-- `scripts/__init__.py`: Makes `scripts.run_sanity:main` importable as the `ml-sanity` console script from `pyproject.toml`.
+- `scripts/__init__.py`: Package marker that lets console entrypoints import utility modules such as `scripts.run_registry` and `scripts.compare_runs`. The Hydra-based `ml-train` and `ml-sanity` commands use wrappers in `src/cli.py`.
 
 ## Source Package
 
@@ -164,9 +165,15 @@ W&B sweep definition. It currently sweeps learning rate, MLP dropout, hidden dim
 
 ### `src/main.py`
 
-Hydra entrypoint for training, evaluation, test-only metrics, prediction-only export, and trainer-level profiling. It composes config, initializes runtime/DDP, seeds reproducibility, runs sanity checks when appropriate, builds data/model/task/optimizer/scheduler/loggers/checkpoints/callbacks, handles resume, and dispatches `run.mode=train|eval|test|predict|profile`. It also supports `--config-file <path>` to replay a fully resolved output config such as `outputs/run_configs/<run.id>.yaml`, `--from-run <run_id>` to find that config through the run registry, and `--resume-run <run_id>` to resume a previous run with `checkpoint.resume=latest`; use `--run-id <id>` to give a replay a specific run id.
+Hydra entrypoint for training, evaluation, test-only metrics, prediction-only export, and trainer-level profiling. It composes config, initializes runtime/DDP, seeds reproducibility, builds data/model/task/optimizer/scheduler/loggers/checkpoints/callbacks, handles resume, and dispatches `run.mode=train|eval|test|predict|profile`. It also supports `--config-file <path>` to replay a fully resolved output config such as `outputs/run_configs/<run.id>/trial_<n>.yaml`, `--from-run <run_id>` to find that config through the run registry, and `--resume-run <run_id>` to select the newest training record, default `run.mode=train`, and pass its checkpoint as an explicit path. Use `--run-id <id>` only for fresh replay and `--registry <path>` for a nondefault registry.
 
 Use this as the primary executable for experiments. Use normal Hydra overrides for newly composed experiments, `--config-file` or `--from-run` for replaying saved resolved configs, and `--resume-run` for continuing an existing run by id.
+
+This entrypoint does not run sanity checks in any mode. Use `scripts/run_sanity.py`, `ml-sanity`, `make sanity`, or the sanity Python API explicitly.
+
+### `src/cli.py`
+
+Console-script wrappers for the Hydra-based `ml-train` and `ml-sanity` entrypoints. They execute `src/main.py` and `scripts/run_sanity.py` as scripts so their `if __name__ == '__main__'` dispatch and Hydra argument handling remain intact.
 
 ### `src/__init__.py`
 
@@ -187,9 +194,10 @@ Add new architectures here and register them with `@register_model('name')`.
 Datasets, dataloaders, preprocessing, and transforms.
 
 - `src/data/dataset.py`: Registered datasets: toy classification, toy regression, toy sequence, and tensor-file dataset.
-- `src/data/dataloader.py`: Builds train, val, and test dataloaders from the dataset registry. Handles split-specific dataloader overrides, optional input transforms, distributed samplers when DDP is active, and dataset-provided `collate_fn` methods for variable-size batches such as detection targets.
+- `src/data/dataloader.py`: Builds train, val, and test dataloaders from the dataset registry. Handles split-specific dataloader overrides, optional input transforms, a synchronized training sampler plus non-padding validation/test samplers when DDP is active, and dataset-provided `collate_fn` methods for variable-size batches such as detection targets.
+  - Training uses padded `DistributedSampler` as required for synchronized updates; validation and test use a non-padding shard sampler to avoid duplicate examples.
 - `src/data/preprocess.py`: Generates file-backed toy tensor splits for `data=tensor_file`.
-- `src/data/transforms.py`: Placeholder transform helpers for train and validation transforms.
+- `src/data/transforms.py`: Registered `identity`, `torchvision_train`, and `torchvision_val` transforms plus split-aware transform construction. Torchvision imports are lazy.
 - `src/data/__init__.py`: Public data exports.
 
 Add real datasets here and keep schema validation close to dataset code.
@@ -199,10 +207,13 @@ Add real datasets here and keep schema validation close to dataset code.
 Task contracts and task implementations.
 
 - `src/tasks/task.py`: `BaseTask`, `ClassificationTask`, `RegressionTask`, `StepResult`, and `build_task`. Tasks own model-output interpretation, loss calls, metric updates, and prediction record formatting.
-- `src/tasks/segmentation.py`: Per-pixel cross-entropy, ignore-index handling, flattened pixel metrics, and mask prediction export.
+- `src/tasks/segmentation.py`: Per-pixel cross-entropy, ignore-index handling, dataset-level confusion-matrix metrics, distributed confusion aggregation, and mask prediction export.
+  - Accuracy, macro IoU, and macro Dice are derived from one accumulated confusion matrix and reduced across distributed ranks.
 - `src/tasks/detection.py`: Model-provided detection loss aggregation, nested target support, score filtering, NMS, and JSON-safe detection export.
+  - `map50` is computed as dataset-level class AP@0.50 after globally sorting detections by score; distributed ranks gather metric records before calculation.
 - `src/tasks/ranking.py`: Point-wise ranking loss and score metrics plus descending ranked-item export.
 - `src/tasks/language_modeling.py`: Flattened next-token loss, ignore-index handling, token metrics, perplexity, and token prediction export.
+  - Perplexity and token metrics use global valid-token counts; ignored tokens do not affect loss aggregation.
 - `src/tasks/__init__.py`: Public task exports.
 
 Add a task when the trainer should stay generic but the workload semantics change.
@@ -220,7 +231,7 @@ Add losses with `@register_loss('name')` and reference them from `configs/task/*
 
 Metrics and metric accumulation.
 
-- `src/metrics/metrics.py`: Registered metrics: accuracy, MSE, MAE, plus `MetricAccumulator`, `MetricCollection`, and `compute_all_metrics`.
+- `src/metrics/metrics.py`: Registered metrics: accuracy, MSE, MAE, top-5 accuracy, IoU, Dice, NDCG, MRR, precision@1, and the detection `map50` registry placeholder, plus `MetricAccumulator`, `MetricCollection`, and `compute_all_metrics`. `DetectionTask` computes structured mAP@50 itself.
 - `src/metrics/__init__.py`: Public metric exports.
 
 Add metrics with `@register_metric('name')` and include them in a task config.
@@ -230,7 +241,7 @@ Add metrics with `@register_metric('name')` and include them in a task config.
 Optimizer and scheduler factories.
 
 - `src/optim/optimizers.py`: Parameter grouping plus registered AdamW, Adam, and SGD builders.
-- `src/optim/schedulers.py`: Registered schedulers, `SchedulerBundle`, warmup wrapping, scheduler stepping, and one-line scheduler behavior descriptions.
+- `src/optim/schedulers.py`: Registered schedulers, `SchedulerBundle`, horizon-aware warmup wrapping, unsupported plateau-warmup validation, scheduler stepping, and one-line scheduler behavior descriptions.
 - `src/optim/__init__.py`: Public optimizer and scheduler exports.
 
 Use this package for training optimization logic. Do not keep optimizer code inside model classes.
@@ -240,7 +251,9 @@ Use this package for training optimization logic. Do not keep optimizer code ins
 Training and evaluation orchestration.
 
 - `src/engine/trainer.py`: Generic trainer with train/validation/test loops, AMP support, accumulation, clipping, finite-loss checks, callbacks, max-step and batch-limit controls, step-based validation, optional LR/grad-norm logging, checkpoint save/resume, early stopping, and exception checkpointing.
+  - Step validation preserves model mode and in-progress task metrics. Partial accumulation windows are normalized by their actual size, epoch schedulers advance before checkpoint capture, and all metric logs use monotonic `global_step` values.
 - `src/engine/evaluator.py`: Evaluation and prediction helper that recursively moves nested tensor batches to the target device, supports tasks that return no evaluation loss, supports batch limits, and returns metrics or prediction records.
+  - Evaluation and prediction restore the caller's model mode; evaluation snapshots and restores task metric state and uses weighted distributed reductions.
 - `src/engine/__init__.py`: Public engine exports.
 
 Modify this package only for framework-level behavior. For workload-specific behavior, prefer a task, callback, metric, or loss.
@@ -249,8 +262,10 @@ Modify this package only for framework-level behavior. For workload-specific beh
 
 Trainer extension hooks.
 
-- `src/callbacks/base.py`: `Callback` hook interface and `CallbackList` dispatcher.
-- `src/callbacks/__init__.py`: Public callback exports.
+- `src/callbacks/base.py`: `Callback` hook interface, small examples, and `CallbackList` dispatcher.
+- `src/callbacks/common.py`: Built-in registered learning-rate, gradient-norm, training-timer, and checkpoint-artifact callbacks.
+- `src/callbacks/factory.py`: Builds enabled callback instances from the top-level `callbacks:` config list.
+- `src/callbacks/__init__.py`: Public callback exports and registration imports.
 
 Use callbacks for optional side effects around training events without changing the core trainer. See `callback_tutorial.md` for hook timing and examples. `src/main.py` builds callbacks from the top-level `callbacks:` list through `src.callbacks.build_callbacks` (re-exported from `src/callbacks/factory.py`), and tests or custom scripts can still pass callback objects directly to `Trainer`.
 
@@ -258,7 +273,8 @@ Use callbacks for optional side effects around training events without changing 
 
 Distributed runtime helpers.
 
-- `src/runtime/distributed.py`: DDP environment detection, setup, cleanup, rank helpers, barriers, model wrapping/unwrapping, small-object broadcast, and distributed metric averaging.
+- `src/runtime/distributed.py`: DDP environment detection, setup, cleanup, rank helpers, barriers, model wrapping/unwrapping, small-object broadcast, weighted sum/count reduction, tensor summation, and serializable object gathering.
+  - Includes weighted sum/count reductions, tensor sums, and serializable object gathering used by metrics and prediction export.
 - `src/runtime/__init__.py`: Public runtime exports.
 
 Use this package for process/rank concerns instead of scattering `torch.distributed` checks through training code.
@@ -268,11 +284,11 @@ Use this package for process/rank concerns instead of scattering `torch.distribu
 Shared framework utilities.
 
 - `src/utils/config.py`: Safe config access, config existence checks, conversion to dictionaries, loading, and merging.
-- `src/utils/registry.py`: Generic registry implementation and decorators for models, datasets, losses, metrics, optimizers, schedulers, tasks, callbacks, and loggers.
+- `src/utils/registry.py`: Generic registry implementation and decorators for models, datasets, transforms, losses, metrics, optimizers, schedulers, tasks, callbacks, and loggers. Built-in logger construction currently remains explicit in `build_loggers`.
 - `src/utils/seed.py`: Reproducibility helpers for Python, NumPy, PyTorch, CUDA, workers, deterministic mode, and rank-aware seeds.
 - `src/utils/types.py`: Shared type aliases and protocols for batches, config dictionaries, model-like objects, datasets, metrics, and schedulers.
-- `src/utils/checkpoint.py`: Fault-tolerant checkpoint manager, RNG state capture/restore, atomic saves, manifest checksums, latest/best lookup, `best.pt`/`last.pt` selector verification, DDP-safe save/load, fallback loading, and legacy save/load helpers.
-- `src/utils/run.py`: Config-derived run identity helper. Computes `run.id`, writes resolved config snapshots, appends repeat-command metadata to `outputs/run_registry.jsonl`, and rewrites artifact paths under `outputs/runs/<run.id>/` for training/profile or `outputs/evaluations/<run.id>/` for eval/test/predict.
+- `src/utils/checkpoint.py`: Fault-tolerant checkpoint manager, RNG state capture/restore, atomic saves, current-file manifest checksums, overwrite/rotation cleanup, optional `best.pt`/`last.pt` selectors, DDP-safe save/load, model-only evaluation restore, fallback loading, and legacy save/load helpers.
+- `src/utils/run.py`: Config-derived run identity helper. Computes `run.id`, writes resolved config snapshots, appends repeat-command metadata to `outputs/run_registry.jsonl`, and rewrites artifact paths under `outputs/runs/<run.id>/trial_<n>/` for training/profile or `outputs/evaluations/<run.id>/trial_<source_trial>/<mode>_<checkpoint>/` for eval/test/predict.
 - `src/utils/run_inspect.py`: Shared inspection helpers for run-registry tools, including run-id config lookup, checkpoint selector resolution, metrics loading, status classification, and command-cwd-aware path resolution.
 - `src/utils/paths.py`: Output, checkpoint, log, and prediction path helpers.
 - `src/utils/logger.py`: Console, JSONL, TensorBoard, and W&B logger backends plus logger collection setup.
@@ -284,6 +300,7 @@ Canonical sanity-check package. Use this package when moving to a new machine or
 
 - `src/utils/sanity/__init__.py`: Public sanity exports: `CheckResult`, `SanityReport`, CUDA diagnostics, `bootstrap_registries`, and `run_sanity_checks`.
 - `src/utils/sanity/core.py`: Main sanity check implementation. Validates Python and package versions from `pyproject.toml`, config keys, runtime, PyTorch CUDA/NVIDIA driver compatibility, output directories, disk space, registries, tensor-file paths, data/model smoke pass, and optional experiment composition.
+  - Validates config values and cross-field scheduler contracts, all artifact directories, output-filesystem disk capacity, and an actual configured-precision optimizer/scheduler smoke step.
 - `src/utils/sanity/cuda.py`: CUDA diagnostics helper. Captures PyTorch CUDA build/version, `torch.cuda.is_available()` warnings, `nvidia-smi` driver details, known minimum NVIDIA driver compatibility for CUDA builds, and UV/pip PyTorch install recommendations that can run before torch is installed.
 - `src/utils/sanity/ddp.py`: Lightweight DDP helper functions for sanity-related checks.
 - `src/utils/sanity/model.py`: Model smoke helper for checking backward behavior.
@@ -301,10 +318,11 @@ The old top-level `src/utils/sanity_check.py` file was removed. New and existing
 - `tests/test_data.py`: Split-specific dataloader override and transform wiring checks.
 - `tests/test_callbacks.py`: Config-driven callback builder checks.
 - `tests/test_model.py`: Model forward-shape and model behavior checks.
+- `tests/test_precision.py`: Shared fp32, fp16/AMP, and bf16 precision-policy checks across trainer/evaluator paths.
 - `tests/test_training.py`: Trainer smoke tests.
 - `tests/test_checkpoint.py`: Checkpoint save/load/resume/fault-tolerance tests.
 - `tests/test_run_identity.py`: Stable run-id, training/evaluation output layout, config snapshot, selector, and tracking-id checks.
-- `tests/test_run_tools.py`: Run-registry tooling checks for replay lookup, comparison reports, metric plotting, failed-run selection, and checkpoint export.
+- `tests/test_run_tools.py`: Run-registry tooling checks for replay/resume lookup, comparison reports, metric plotting, evaluate-command construction, failed-run selection, and checkpoint export.
 - `tests/test_metrics.py`: Metric correctness tests.
 - `tests/test_tasks.py`: Registration, loss, metric, prediction, detection filtering, and nested-device-transfer checks for task implementations.
 - `tests/test_schedulers.py`: Scheduler factory and behavior tests.
@@ -327,19 +345,21 @@ Keep notebooks lightweight. Large generated outputs should stay under ignored ou
 
 ## Output Organization
 
-Run artifacts are isolated by a config-derived id instead of by timestamp. At startup, `prepare_run(cfg)` sets:
+`src.utils.run.prepare_run` owns runtime identity and paths:
 
-- `run.id`: readable id derived from `run.name`, model/data/task names, `run.trial`, and `run.config_id`, unless explicitly provided. Existing ids are reused instead of suffixed; fresh duplicate runs warn, while intentional training resumes do not.
-- `run.config_id`: stable hash of the effective experiment config after excluding generated path fields.
-- `run.run_dir`: `outputs/runs/<run.id>` for train/profile or `outputs/evaluations/<run.id>` for eval/test/predict.
-- `checkpoint.dir`: `<run.run_dir>/checkpoints`.
-- `run.log_dir`: `<run.run_dir>/logs`.
-- `logging.jsonl.path`: `<run.run_dir>/logs/metrics.jsonl`.
-- `run.prediction_dir`: `<run.run_dir>/predictions`.
-- `run.profile_dir`: `<run.run_dir>/profiles`.
-- `run.tracking_id`: `<run.id>` for train/profile and `<run.id>_evaluation` for eval/test/predict.
+- `run.id`: stable readable experiment id derived from `run.name`, model/data/task names, and `run.config_id`, unless manually supplied for a fresh run.
+- `run.trial_id`: code-managed monotonically increasing trial number. It is not a user config setting.
+- `run.config_id`: stable effective-config hash excluding runtime identity, mode, output paths, tracking fields, and checkpoint resume.
+- Fresh train/profile directory: `outputs/runs/<run.id>/trial_<n>/`.
+- Training config snapshot: `outputs/run_configs/<run.id>/trial_<n>.yaml`.
+- Checkpoint-derived evaluation directory: `outputs/evaluations/<run.id>/trial_<source_trial>/<mode>_<checkpoint>/`.
+- `run.tracking_id`: generated as `<run.id>-trial-<n>` for train/profile and `<run.id>-trial-<source_trial>-<mode>-<checkpoint>` for eval/test/predict.
 
-Training config snapshots are stored at `outputs/run_configs/<run.id>.yaml`. Eval/test/predict snapshots are stored at `outputs/evaluations/<run.id>/config.yaml`, which prevents evaluation artifacts from overwriting the training config. All modes append metadata to `outputs/run_registry.jsonl`, including `command` and `command_cwd` for repeating the invocation. Sensitive CLI values are redacted in `command`, but resolved config values are still stored for reproducibility. Replay a resolved snapshot with `uv run python src/main.py --config-file outputs/run_configs/<run.id>.yaml` or `uv run python src/main.py --from-run <run.id>`; append `--run-id <id>` for a specific replay id or `run.trial=...` for a planned repeat. Resume an existing run by id with `uv run python src/main.py --resume-run <run.id>`. If a fresh invocation reuses an existing artifact directory or config snapshot, `prepare_run` keeps that id and emits a warning; intentional training resumes suppress that warning. In eval/test/predict mode, checkpoint selectors such as `latest`, `best`, and `epoch_0005` load from the training checkpoint folder while generated evaluation artifacts go to `outputs/evaluations/<run.id>/`.
+Fresh duplicate configs retain the same `run.id` but receive the next trial, preventing accidental log/checkpoint appends. Training resume and evaluation recover `run.id` and `trial_id` from an explicit checkpoint path such as `outputs/runs/<run.id>/trial_<n>/checkpoints/best.pt`; they do not recompute identity from the config hash. `--resume-run` and `ml-evaluate-run` resolve registry selectors to such explicit paths.
+
+Repeated evaluation of the same source trial, mode, and checkpoint replaces only its deterministic evaluation directory and emits a bold red warning. Different checkpoints remain separate, for example `eval_best`, `eval_last`, and `eval_epoch_0005`. Every invocation logs a bold cyan startup line with run id, trial id, mode, and output directory.
+
+All modes append metadata to `outputs/run_registry.jsonl`, including trial id, resolved config, artifact paths, `command`, and `command_cwd`. Fresh replay uses `--config-file` or `--from-run` and automatically receives a new trial. `--run-id` may rename a fresh replay but is rejected with `--resume-run` because the checkpoint path owns resume identity.
 
 ## Generated And Ignored Paths
 
@@ -374,5 +394,6 @@ The cleanup removed files that duplicated canonical locations or were generated 
 - New experiment preset: `configs/experiment/`.
 - New run identity behavior: `src/utils/run.py` plus `configs/config.yaml` run identity fields.
 - New machine/environment validation: `src/utils/sanity/core.py` or an extra check passed to `run_sanity_checks`.
+  - Validates config values and cross-field scheduler contracts, all artifact directories, output-filesystem disk capacity, and an actual configured-precision optimizer/scheduler smoke step.
 - New CLI workflow: `scripts/` plus documentation in `README.md`.
 - New safety coverage: `tests/`.

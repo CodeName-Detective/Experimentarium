@@ -1,7 +1,7 @@
 """Distributed runtime helpers for CPU, single-GPU, and DDP workflows.
 
 This module centralizes rank checks, barriers, rank-zero behavior, and simple
-metric reductions. It does not force DDP on users; it only reflects an already
+weighted metric reductions and object gathering. It does not force DDP on users; it only reflects an already
 initialized process group or environment variables from ``torchrun``.
 
 Typical usage:
@@ -125,6 +125,49 @@ def mean_scalar(value: float, device: Any = 'cpu') -> float:
     dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
     tensor /= world_size()
     return float(tensor.item())
+
+
+def sum_scalar(value: float, device: Any = 'cpu') -> float:
+    """Sum a scalar value across distributed ranks."""
+    if not is_initialized():
+        return float(value)
+    try:
+        import torch
+    except ModuleNotFoundError as exc:
+        raise RuntimeError('torch is required for distributed metric reduction') from exc
+    tensor = torch.tensor(float(value), device=device, dtype=torch.float64)
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    return float(tensor.item())
+
+
+def reduce_sum_count(total: float, count: int | float, device: Any = 'cpu') -> tuple[float, float]:
+    """Sum a weighted metric numerator and denominator across ranks."""
+    if not is_initialized():
+        return float(total), float(count)
+    try:
+        import torch
+    except ModuleNotFoundError as exc:
+        raise RuntimeError('torch is required for distributed metric reduction') from exc
+    tensor = torch.tensor([float(total), float(count)], device=device, dtype=torch.float64)
+    dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+    return float(tensor[0].item()), float(tensor[1].item())
+
+
+def sum_tensor(tensor: Any) -> Any:
+    """Return a tensor summed across ranks without mutating the caller's tensor."""
+    result = tensor.clone()
+    if is_initialized():
+        dist.all_reduce(result, op=dist.ReduceOp.SUM)
+    return result
+
+
+def all_gather_objects(value: Any) -> list[Any]:
+    """Gather one serializable Python object from every rank."""
+    if not is_initialized():
+        return [value]
+    values: list[Any] = [None] * world_size()
+    dist.all_gather_object(values, value)
+    return values
 
 
 def mean_dict(metrics: dict[str, Any], device: Any = 'cpu') -> dict[str, float]:

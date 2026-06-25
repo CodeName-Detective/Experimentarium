@@ -27,3 +27,10 @@ def test_mixed_precision_falls_back_to_plain_path_off_cuda():
     assert not scaler_enabled(torch.device('cpu'), 'amp')
     with precision_autocast(torch.device('cpu'), 'amp'):
         assert True
+
+
+def test_invalid_precision_is_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match='Unsupported precision'):
+        normalize_precision('fp23_typo')
